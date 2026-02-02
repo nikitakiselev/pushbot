@@ -1,5 +1,6 @@
 """Загрузка и валидация конфигурации из YAML."""
 import yaml
+import os
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel, Field
@@ -19,8 +20,12 @@ class AppConfig(BaseModel):
     services: List[ServiceConfig] = Field(default_factory=list)
 
 
-def load_config(config_path: str = "config.yaml") -> AppConfig:
+def load_config(config_path: str = None) -> AppConfig:
     """Загрузить конфигурацию из YAML файла."""
+    if config_path is None:
+        # Проверяем переменную окружения или используем значение по умолчанию
+        config_path = os.getenv("PUSHBOT_CONFIG", "config.yaml")
+    
     config_file = Path(config_path)
     if not config_file.exists():
         raise FileNotFoundError(f"Конфигурационный файл {config_path} не найден")

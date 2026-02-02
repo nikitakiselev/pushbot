@@ -35,8 +35,12 @@ async def lifespan(app: FastAPI):
         db_services = db.query(Service).all()
         
         # Удаляем сервисы, которых нет в конфигурации
+        # Сначала удаляем связанные деплои, чтобы избежать нарушения ограничений
         for db_service in db_services:
             if db_service.name not in config_service_names:
+                # Удаляем все деплои, связанные с этим сервисом
+                db.query(Deployment).filter(Deployment.service_id == db_service.id).delete()
+                # Теперь можно безопасно удалить сервис
                 db.delete(db_service)
         
         # Добавляем или обновляем сервисы из конфигурации
