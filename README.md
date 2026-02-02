@@ -137,3 +137,36 @@ pushbot/
 - **Сбор логов в реальном времени**: stdout и stderr собираются построчно
 - **SQLite база данных**: История деплоев сохраняется в локальной БД
 - **Server-Sent Events**: Логи передаются в браузер в реальном времени
+
+
+## Run as daemon
+
+echo "GITHUB_WEBHOOK_SECRET=YOUR_GITHUB_WEBHOOK_TOKEN" > /opt/pushbot/.env
+
+*~/.config/systemd/user/pushbot.service*
+```
+[Unit]
+Description=PushBot
+After=network.target
+
+[Service]
+ExecStart=/opt/pushbot/pushbot serve
+WorkingDirectory=/opt/pushbot
+EnvironmentFile=/opt/pushbot/.env
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=default.target
+```
+
+```
+systemctl --user daemon-reload
+systemctl --user enable pushbot
+systemctl --user start pushbot
+
+systemctl --user status pushbot
+journalctl --user -u pushbot -f
+
+systemctl --user restart pushbot
+```
