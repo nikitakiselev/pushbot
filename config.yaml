@@ -1,0 +1,6 @@
+services:
+  - name: product-generator
+    repository: "telecart-labs/product-generator"
+    path: "/Users/nikitakiselev/code/product-generator"
+    branch: "master"
+    deploy_command: "foobar-command"

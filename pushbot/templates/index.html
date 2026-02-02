@@ -1,0 +1,892 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PushBot - Мониторинг деплоев</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        'primary': '#2c3e50',
+                        'primary-light': '#3498db',
+                        'success': '#27ae60',
+                        'danger': '#e74c3c',
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="bg-gray-100 text-gray-800 font-sans leading-relaxed">
+    {% raw %}
+    <div id="app" class="relative">
+        <header class="bg-primary text-white py-5 mb-8 shadow-md">
+            <div class="container mx-auto max-w-7xl px-5">
+                <h1 class="text-center text-3xl font-bold">🚀 PushBot - Мониторинг деплоев</h1>
+            </div>
+        </header>
+
+        <div class="container mx-auto max-w-7xl px-5">
+            <!-- Деплои -->
+            <div class="bg-white rounded-lg p-5 mb-5 shadow-md">
+                <h2 class="text-xl font-semibold text-primary mb-4 pb-2 border-b-2 border-primary-light">
+                    Деплои
+                </h2>
+                <button 
+                    class="bg-primary-light hover:bg-blue-600 disabled:bg-gray-400 disabled:cursor-not-allowed text-white px-5 py-2 rounded text-sm mb-4 transition-colors duration-300"
+                    @click="refreshDeployments"
+                    :disabled="loading.deployments"
+                >
+                    {{ loading.deployments ? 'Загрузка...' : 'Обновить' }}
+                </button>
+                <!-- Отладочная информация (временно) -->
+                <div v-if="false" class="text-xs text-gray-400 mb-2 p-2 bg-gray-100 rounded">
+                    Debug: active={{ activeDeployments.length }}, recent={{ recentDeployments.length }}, all={{ allDeployments.length }}, loading={{ loading.deployments }}
+                </div>
+                <div v-if="allDeployments.length === 0 && !loading.deployments" class="text-center py-10 text-gray-500">
+                    Нет деплоев
+                </div>
+                <div v-else-if="loading.deployments" class="text-center py-10 text-gray-500">
+                    Загрузка...
+                </div>
+                <div v-else class="space-y-2">
+                    <!-- Активные деплои (сверху, с жёлтой рамкой) -->
+                    <template v-if="activeDeployments.length > 0">
+                        <deployment-history-item
+                            v-for="deployment in activeDeployments"
+                            :key="'active-' + deployment.id"
+                            :deployment="deployment"
+                            :services="services"
+                            :is-active="true"
+                            @show-logs="showLogsDrawer"
+                            @update-status="updateDeploymentStatus"
+                        />
+                    </template>
+                    <!-- История деплоев -->
+                    <template v-if="recentDeployments.length > 0">
+                        <deployment-history-item
+                            v-for="deployment in recentDeployments"
+                            :key="'recent-' + deployment.id"
+                            :deployment="deployment"
+                            :services="services"
+                            :is-active="false"
+                            @show-logs="showLogsDrawer"
+                        />
+                    </template>
+                </div>
+            </div>
+
+            <!-- Список сервисов -->
+            <div class="bg-white rounded-lg p-5 mb-5 shadow-md">
+                <h2 class="text-xl font-semibold text-primary mb-4 pb-2 border-b-2 border-primary-light">
+                    Настроенные сервисы
+                </h2>
+                <div v-if="services.length === 0" class="text-center py-10 text-gray-500">
+                    Нет настроенных сервисов
+                </div>
+                <div v-else class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    <div v-for="service in services" :key="service.id" class="border border-gray-300 rounded-lg p-4 bg-gray-50">
+                        <h3 class="text-lg font-semibold text-primary mb-2">{{ service.name }}</h3>
+                        <div class="text-sm text-gray-600 mb-3">
+                            <p class="mb-1"><span class="font-bold text-gray-800">Репозиторий:</span> {{ service.repository }}</p>
+                            <p class="mb-1"><span class="font-bold text-gray-800">Путь:</span> {{ service.path }}</p>
+                            <p class="mb-1"><span class="font-bold text-gray-800">Ветка:</span> {{ service.branch }}</p>
+                        </div>
+                        <button 
+                            @click="deployService(service.id)"
+                            :disabled="deployingServices.includes(service.id)"
+                            class="w-full bg-primary-light hover:bg-blue-600 disabled:bg-gray-400 disabled:cursor-not-allowed text-white px-4 py-2 rounded text-sm transition-colors duration-300"
+                        >
+                            {{ deployingServices.includes(service.id) ? 'Запуск...' : 'Запустить деплой' }}
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Drawer для логов -->
+        <div 
+            v-if="logsDrawerOpen"
+            class="fixed inset-0 z-50 overflow-hidden"
+        >
+            <!-- Overlay -->
+            <div 
+                class="absolute inset-0 bg-black bg-opacity-50 transition-opacity"
+                @click="closeLogsDrawer"
+            ></div>
+            
+            <!-- Drawer панель -->
+            <div 
+                class="absolute right-0 top-0 h-full w-full max-w-3xl bg-white shadow-xl transform transition-transform duration-300 ease-in-out flex flex-col"
+                @click.stop
+            >
+                <!-- Header -->
+                <div class="flex items-center justify-between p-4 border-b bg-gray-50">
+                    <div>
+                        <h3 class="text-lg font-semibold text-gray-800">
+                            {{ getServiceName(logsDrawerDeployment) || 'Логи деплоя' }}
+                        </h3>
+                        <p class="text-sm text-gray-500" v-if="logsDrawerDeployment">
+                            {{ logsDrawerDeployment.status === 'running' ? 'Выполняется' : logsDrawerDeployment.status === 'queued' ? 'В очереди' : logsDrawerDeployment.status === 'success' ? 'Успешно' : logsDrawerDeployment.status === 'failed' ? 'Ошибка' : 'Завершен' }}
+                            <span v-if="logsDrawerDeployment.commit_sha" class="ml-2 font-mono text-xs">
+                                {{ logsDrawerDeployment.commit_sha.substring(0, 7) }}
+                            </span>
+                        </p>
+                    </div>
+                    <button 
+                        @click="closeLogsDrawer"
+                        class="text-gray-500 hover:text-gray-700 p-2 rounded hover:bg-gray-200 transition-colors"
+                    >
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                        </svg>
+                    </button>
+                </div>
+                
+                <!-- Логи -->
+                <div class="flex-1 overflow-y-auto bg-gray-900 text-gray-300 p-4 font-mono text-sm logs-drawer-content">
+                    <div v-if="logsDrawerLogs.length === 0" class="text-gray-500 text-center py-8">
+                        {{ logsDrawerDeployment && (logsDrawerDeployment.status === 'running' || logsDrawerDeployment.status === 'queued') ? 'Загрузка логов...' : 'Логи отсутствуют' }}
+                    </div>
+                    <div 
+                        v-for="(log, index) in logsDrawerLogs" 
+                        :key="index"
+                        :class="['my-1 whitespace-pre-wrap break-words', log.type === 'stderr' ? 'text-red-400' : 'text-gray-300']"
+                    >
+                        {{ log.line }}
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endraw %}
+
+    {% raw %}
+    <script>
+        const { createApp } = Vue;
+
+        // Компонент карточки деплоя
+        const DeploymentCard = {
+            props: ['deployment', 'services', 'isActive'],
+            data() {
+                return {
+                    logs: [],
+                    eventSource: null,
+                    showLogs: false
+                };
+            },
+            computed: {
+                serviceName() {
+                    const service = this.services.find(s => s.id === this.deployment.service_id);
+                    return service ? service.name : 'Unknown';
+                },
+                statusText() {
+                    const statusMap = {
+                        'queued': 'В очереди',
+                        'running': 'Выполняется',
+                        'success': 'Успешно',
+                        'failed': 'Ошибка'
+                    };
+                    return statusMap[this.deployment.status] || this.deployment.status;
+                },
+                statusBadgeClass() {
+                    const classes = {
+                        'queued': 'bg-yellow-500 text-white',
+                        'running': 'bg-primary-light text-white',
+                        'success': 'bg-success text-white',
+                        'failed': 'bg-danger text-white'
+                    };
+                    return classes[this.deployment.status] || 'bg-gray-500 text-white';
+                },
+                borderClass() {
+                    const classes = {
+                        'queued': 'border-l-4 border-yellow-500',
+                        'running': 'border-l-4 border-primary-light',
+                        'success': 'border-l-4 border-success',
+                        'failed': 'border-l-4 border-danger'
+                    };
+                    return classes[this.deployment.status] || 'border-l-4 border-gray-400';
+                },
+                formattedStartTime() {
+                    if (!this.deployment.started_at) return '';
+                    return new Date(this.deployment.started_at).toLocaleString('ru-RU');
+                },
+                formattedEndTime() {
+                    if (!this.deployment.finished_at) return '';
+                    return new Date(this.deployment.finished_at).toLocaleString('ru-RU');
+                },
+                shortCommitSha() {
+                    if (!this.deployment.commit_sha) return '';
+                    return this.deployment.commit_sha.substring(0, 7);
+                },
+                truncatedMessage() {
+                    if (!this.deployment.commit_message) return '';
+                    return this.deployment.commit_message.length > 100
+                        ? this.deployment.commit_message.substring(0, 100) + '...'
+                        : this.deployment.commit_message;
+                }
+            },
+            mounted() {
+                if (this.isActive) {
+                    this.connectToLogs();
+                } else if (this.deployment.stdout || this.deployment.stderr) {
+                    // Для завершенных деплоев загружаем логи из данных
+                    if (this.deployment.stdout) {
+                        this.deployment.stdout.split('\n').forEach(line => {
+                            if (line.trim()) {
+                                this.logs.push({ type: 'stdout', line: line });
+                            }
+                        });
+                    }
+                    if (this.deployment.stderr) {
+                        this.deployment.stderr.split('\n').forEach(line => {
+                            if (line.trim()) {
+                                this.logs.push({ type: 'stderr', line: line });
+                            }
+                        });
+                    }
+                }
+            },
+            beforeUnmount() {
+                if (this.eventSource) {
+                    this.eventSource.close();
+                }
+            },
+            methods: {
+                connectToLogs() {
+                    if (!this.isActive) return;
+                    
+                    this.eventSource = new EventSource(`/api/deployments/${this.deployment.id}/logs`);
+                    
+                    this.eventSource.onmessage = (event) => {
+                        const data = JSON.parse(event.data);
+                        
+                        if (data.type === 'status') {
+                            // Обновляем статус деплоя
+                            this.$emit('update-status', {
+                                id: this.deployment.id,
+                                status: data.status,
+                                exit_code: data.exit_code
+                            });
+                            this.eventSource.close();
+                            return;
+                        }
+                        
+                        // Добавляем лог
+                        this.logs.push({
+                            type: data.type,
+                            line: data.line
+                        });
+                        
+                        // Автопрокрутка
+                        this.$nextTick(() => {
+                            const container = this.$el.querySelector('.logs-container');
+                            if (container) {
+                                container.scrollTop = container.scrollHeight;
+                            }
+                        });
+                    };
+                    
+                    this.eventSource.onerror = (error) => {
+                        console.error('Ошибка SSE:', error);
+                        this.eventSource.close();
+                    };
+                },
+                toggleLogs() {
+                    this.showLogs = !this.showLogs;
+                }
+            },
+            template: `
+                <div :class="['border border-gray-300 rounded-lg p-4 mb-4 bg-gray-50 transition-all duration-300', borderClass]">
+                    <div class="flex justify-between items-center mb-2">
+                        <div class="font-bold text-lg">{{ serviceName }}</div>
+                        <span :class="['px-3 py-1 rounded-full text-xs font-bold uppercase', statusBadgeClass]">
+                            {{ statusText }}
+                        </span>
+                    </div>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 mb-2 text-sm text-gray-600">
+                        <div v-if="formattedStartTime">
+                            <span class="font-bold text-gray-800">Начало:</span> {{ formattedStartTime }}
+                        </div>
+                        <div v-if="formattedEndTime">
+                            <span class="font-bold text-gray-800">Завершение:</span> {{ formattedEndTime }}
+                        </div>
+                        <div v-if="deployment.exit_code !== null && deployment.exit_code !== undefined">
+                            <span class="font-bold text-gray-800">Код выхода:</span> {{ deployment.exit_code }}
+                        </div>
+                        <div v-if="shortCommitSha">
+                            <span class="font-bold text-gray-800">Коммит:</span> {{ shortCommitSha }}
+                        </div>
+                        <div v-if="deployment.branch">
+                            <span class="font-bold text-gray-800">Ветка:</span> {{ deployment.branch }}
+                        </div>
+                    </div>
+                    <div v-if="truncatedMessage" class="my-2 italic text-gray-600">
+                        {{ truncatedMessage }}
+                    </div>
+                    <div v-if="isActive || deployment.status === 'queued'">
+                        <div v-if="deployment.status === 'queued'" class="bg-gray-100 text-gray-600 p-4 rounded mt-2 text-sm text-center">
+                            Ожидание в очереди...
+                        </div>
+                        <div v-else class="bg-gray-900 text-gray-300 p-4 rounded mt-2 font-mono text-xs max-h-96 overflow-y-auto logs-container">
+                            <div v-if="logs.length === 0" class="my-1 whitespace-pre-wrap break-words">Загрузка логов...</div>
+                            <div 
+                                v-for="(log, index) in logs" 
+                                :key="index"
+                                :class="['my-1 whitespace-pre-wrap break-words', log.type === 'stderr' ? 'text-red-400' : 'text-gray-300']"
+                            >
+                                {{ log.line }}
+                            </div>
+                        </div>
+                    </div>
+                    <button 
+                        v-if="!isActive && deployment.status !== 'queued'"
+                        @click="$emit('show-logs', deployment.id)"
+                        class="mt-2 text-sm text-primary-light hover:text-blue-700 font-medium cursor-pointer"
+                    >
+                        Показать логи →
+                    </button>
+                </div>
+            `
+        };
+
+        // Компонент для истории деплоев (компактный)
+        const DeploymentHistoryItem = {
+            props: {
+                deployment: { type: Object, required: true },
+                services: { type: Array, required: true },
+                isActive: { type: Boolean, default: false }
+            },
+            data() {
+                return {
+                    logs: [],
+                    eventSource: null
+                };
+            },
+            data() {
+                return {
+                    logs: [],
+                    showLogs: false
+                };
+            },
+            computed: {
+                serviceName() {
+                    const service = this.services.find(s => s.id === this.deployment.service_id);
+                    return service ? service.name : 'Unknown';
+                },
+                statusText() {
+                    const statusMap = {
+                        'queued': 'В очереди',
+                        'running': 'Выполняется',
+                        'success': 'Успешно',
+                        'failed': 'Ошибка'
+                    };
+                    return statusMap[this.deployment.status] || this.deployment.status;
+                },
+                statusBadgeClass() {
+                    const classes = {
+                        'queued': 'bg-yellow-500 text-white',
+                        'running': 'bg-primary-light text-white',
+                        'success': 'bg-success text-white',
+                        'failed': 'bg-danger text-white'
+                    };
+                    return classes[this.deployment.status] || 'bg-gray-500 text-white';
+                },
+                borderClass() {
+                    const classes = {
+                        'queued': 'border-l-2 border-yellow-500',
+                        'running': 'border-l-2 border-primary-light',
+                        'success': 'border-l-2 border-success',
+                        'failed': 'border-l-2 border-danger'
+                    };
+                    return classes[this.deployment.status] || 'border-l-2 border-gray-400';
+                },
+                formattedStartTime() {
+                    if (!this.deployment.started_at) return '';
+                    const date = new Date(this.deployment.started_at);
+                    return date.toLocaleString('ru-RU', { 
+                        day: '2-digit', 
+                        month: '2-digit', 
+                        hour: '2-digit', 
+                        minute: '2-digit' 
+                    });
+                },
+                formattedEndTime() {
+                    if (!this.deployment.finished_at) return '';
+                    const date = new Date(this.deployment.finished_at);
+                    return date.toLocaleString('ru-RU', { 
+                        day: '2-digit', 
+                        month: '2-digit', 
+                        hour: '2-digit', 
+                        minute: '2-digit' 
+                    });
+                },
+                shortCommitSha() {
+                    if (!this.deployment.commit_sha) return '';
+                    return this.deployment.commit_sha.substring(0, 7);
+                },
+                duration() {
+                    if (!this.deployment.started_at) return '';
+                    const start = new Date(this.deployment.started_at);
+                    const end = this.deployment.finished_at ? new Date(this.deployment.finished_at) : new Date();
+                    const diff = Math.floor((end - start) / 1000);
+                    if (diff < 60) return `${diff}с`;
+                    const minutes = Math.floor(diff / 60);
+                    const seconds = diff % 60;
+                    return `${minutes}м ${seconds}с`;
+                }
+            },
+            mounted() {
+                if (this.isActive && (this.deployment.status === 'running' || this.deployment.status === 'queued')) {
+                    this.connectToLogs();
+                } else if (this.deployment.stdout || this.deployment.stderr) {
+                    if (this.deployment.stdout) {
+                        this.deployment.stdout.split('\n').forEach(line => {
+                            if (line.trim()) {
+                                this.logs.push({ type: 'stdout', line: line });
+                            }
+                        });
+                    }
+                    if (this.deployment.stderr) {
+                        this.deployment.stderr.split('\n').forEach(line => {
+                            if (line.trim()) {
+                                this.logs.push({ type: 'stderr', line: line });
+                            }
+                        });
+                    }
+                }
+            },
+            beforeUnmount() {
+                if (this.eventSource) {
+                    this.eventSource.close();
+                }
+            },
+            methods: {
+                connectToLogs() {
+                    if (!this.isActive || (this.deployment.status !== 'running' && this.deployment.status !== 'queued')) {
+                        return;
+                    }
+                    
+                    this.eventSource = new EventSource(`/api/deployments/${this.deployment.id}/logs`);
+                    
+                    this.eventSource.onmessage = (event) => {
+                        const data = JSON.parse(event.data);
+                        
+                        if (data.type === 'status') {
+                            this.$emit('update-status', {
+                                id: this.deployment.id,
+                                status: data.status,
+                                exit_code: data.exit_code
+                            });
+                            this.eventSource.close();
+                            return;
+                        }
+                        
+                        this.logs.push({
+                            type: data.type,
+                            line: data.line
+                        });
+                    };
+                    
+                    this.eventSource.onerror = (error) => {
+                        console.error('Ошибка SSE:', error);
+                        this.eventSource.close();
+                    };
+                }
+            },
+            template: `
+                <div :class="['border rounded p-2 bg-white hover:bg-gray-50 transition-colors', borderClass, isActive && (deployment.status === 'running' || deployment.status === 'queued') ? 'border-yellow-400 border-2' : 'border-gray-200']">
+                    <div class="flex items-center justify-between gap-2">
+                        <div class="flex items-center gap-3 flex-1 min-w-0">
+                            <span class="font-semibold text-sm text-gray-800 truncate">{{ serviceName }}</span>
+                            <span :class="['px-2 py-0.5 rounded text-xs font-bold uppercase whitespace-nowrap', statusBadgeClass]">
+                                {{ statusText }}
+                            </span>
+                            <span class="text-xs text-gray-500 whitespace-nowrap">{{ formattedStartTime }}</span>
+                            <span v-if="formattedEndTime" class="text-xs text-gray-500 whitespace-nowrap">→ {{ formattedEndTime }}</span>
+                            <span v-if="duration" class="text-xs text-gray-400 whitespace-nowrap">({{ duration }})</span>
+                            <span v-if="shortCommitSha" class="text-xs text-gray-400 font-mono whitespace-nowrap">{{ shortCommitSha }}</span>
+                            <span v-if="deployment.branch" class="text-xs text-gray-400 whitespace-nowrap">{{ deployment.branch }}</span>
+                            <span v-if="deployment.exit_code !== null && deployment.exit_code !== undefined" 
+                                  :class="['text-xs whitespace-nowrap', deployment.exit_code === 0 ? 'text-gray-500' : 'text-red-600']">
+                                код: {{ deployment.exit_code }}
+                            </span>
+                        </div>
+                        <button 
+                            v-if="isActive || logs.length > 0 || deployment.stdout || deployment.stderr"
+                            @click="$emit('show-logs', deployment.id)"
+                            class="ml-auto text-xs text-primary-light hover:text-blue-700 font-medium cursor-pointer"
+                        >
+                            Логи →
+                        </button>
+                    </div>
+                </div>
+            `
+        };
+
+        // Главное приложение
+        createApp({
+            components: {
+                DeploymentCard,
+                DeploymentHistoryItem
+            },
+            data() {
+                return {
+                    activeDeployments: [],
+                    recentDeployments: [],
+                    services: [],
+                    loading: {
+                        deployments: false
+                    },
+                    refreshInterval: null,
+                    deployingServices: [],
+                    logsDrawerOpen: false,
+                    logsDrawerDeployment: null,
+                    logsDrawerLogs: [],
+                    logsDrawerEventSource: null,
+                    escHandler: null
+                };
+            },
+            computed: {
+                allDeployments() {
+                    const all = [...this.activeDeployments, ...this.recentDeployments];
+                    console.log('Computed allDeployments:', all.length, 'active:', this.activeDeployments.length, 'recent:', this.recentDeployments.length);
+                    return all;
+                }
+            },
+            mounted() {
+                this.loadInitialData();
+                // Автообновление активных деплоев каждые 5 секунд (без перезагрузки истории)
+                this.refreshInterval = setInterval(() => {
+                    this.refreshActiveDeploymentsSilent();
+                }, 5000);
+                // Обработчик ESC для закрытия drawer
+                this.escHandler = (event) => {
+                    if (event.key === 'Escape' && this.logsDrawerOpen) {
+                        this.closeLogsDrawer();
+                    }
+                };
+                document.addEventListener('keydown', this.escHandler);
+            },
+            beforeUnmount() {
+                if (this.refreshInterval) {
+                    clearInterval(this.refreshInterval);
+                }
+                if (this.escHandler) {
+                    document.removeEventListener('keydown', this.escHandler);
+                }
+            },
+            methods: {
+                async loadInitialData() {
+                    await Promise.all([
+                        this.loadDeployments(),
+                        this.loadServices()
+                    ]);
+                },
+                async loadDeployments() {
+                    this.loading.deployments = true;
+                    try {
+                        const [activeResponse, recentResponse] = await Promise.all([
+                            fetch('/api/deployments/active'),
+                            fetch('/api/deployments?limit=50')
+                        ]);
+                        const activeData = await activeResponse.json();
+                        const recentData = await recentResponse.json();
+                        
+                        console.log('Active deployments from API:', activeData);
+                        console.log('Recent deployments from API:', recentData);
+                        
+                        // Используем Vue.set или прямое присваивание для реактивности
+                        const activeList = activeData.active_deployments || [];
+                        const recentList = recentData.deployments || [];
+                        
+                        // Исключаем активные деплои из истории
+                        const activeIds = new Set(activeList.map(d => d.id));
+                        const filteredRecent = recentList
+                            .filter(d => d.status !== 'running' && d.status !== 'queued' && !activeIds.has(d.id))
+                            .slice(0, 20);
+                        
+                        // Присваиваем массивы напрямую для правильной реактивности
+                        this.activeDeployments.splice(0, this.activeDeployments.length, ...activeList);
+                        this.recentDeployments.splice(0, this.recentDeployments.length, ...filteredRecent);
+                        
+                        console.log('Active deployments after processing:', this.activeDeployments.length);
+                        console.log('Recent deployments after processing:', this.recentDeployments.length);
+                        console.log('All deployments count:', this.allDeployments.length);
+                    } catch (error) {
+                        console.error('Ошибка загрузки деплоев:', error);
+                    } finally {
+                        this.loading.deployments = false;
+                    }
+                },
+                async loadActiveDeployments() {
+                    try {
+                        const response = await fetch('/api/deployments/active');
+                        const data = await response.json();
+                        this.activeDeployments = data.active_deployments || [];
+                    } catch (error) {
+                        console.error('Ошибка загрузки активных деплоев:', error);
+                    }
+                },
+                async refreshActiveDeploymentsSilent() {
+                    // Тихое обновление без показа индикатора загрузки
+                    try {
+                        const response = await fetch('/api/deployments/active');
+                        const data = await response.json();
+                        const newDeployments = data.active_deployments || [];
+                        
+                        // Обновляем существующие деплои и добавляем новые
+                        const existingIds = new Set(this.activeDeployments.map(d => d.id));
+                        const newIds = new Set(newDeployments.map(d => d.id));
+                        
+                        // Обновляем существующие деплои по одному, чтобы избежать пересоздания компонентов
+                        const toRemove = [];
+                        this.activeDeployments.forEach((existingDeployment, index) => {
+                            const newDeployment = newDeployments.find(nd => nd.id === existingDeployment.id);
+                            if (newDeployment) {
+                                // Обновляем только изменённые поля (Vue 3 автоматически отслеживает изменения)
+                                Object.assign(existingDeployment, newDeployment);
+                            } else if (!newIds.has(existingDeployment.id)) {
+                                // Деплой завершён, помечаем для удаления
+                                if (existingDeployment.status === 'success' || existingDeployment.status === 'failed') {
+                                    toRemove.push(index);
+                                    // Добавляем в историю, если его там ещё нет
+                                    if (!this.recentDeployments.find(rd => rd.id === existingDeployment.id)) {
+                                        this.recentDeployments.unshift({ ...existingDeployment });
+                                        if (this.recentDeployments.length > 20) {
+                                            this.recentDeployments.pop();
+                                        }
+                                    }
+                                }
+                            }
+                        });
+                        
+                        // Удаляем завершённые деплои (в обратном порядке, чтобы индексы не сбились)
+                        toRemove.reverse().forEach(index => {
+                            this.activeDeployments.splice(index, 1);
+                        });
+                        
+                        // Добавляем новые деплои
+                        newDeployments.forEach(newDeployment => {
+                            if (!existingIds.has(newDeployment.id)) {
+                                this.activeDeployments.push(newDeployment);
+                            }
+                        });
+                    } catch (error) {
+                        console.error('Ошибка обновления активных деплоев:', error);
+                    }
+                },
+                async loadRecentDeployments() {
+                    this.loading.recent = true;
+                    try {
+                        const response = await fetch('/api/deployments?limit=20');
+                        const data = await response.json();
+                        const newDeployments = (data.deployments || [])
+                            .filter(d => d.status !== 'running' && d.status !== 'queued')
+                            .slice(0, 20);
+                        
+                        // Обновляем только если список действительно изменился
+                        const currentIds = new Set(this.recentDeployments.map(d => d.id));
+                        const newIds = new Set(newDeployments.map(d => d.id));
+                        
+                        // Проверяем, есть ли новые деплои
+                        const hasNew = newDeployments.some(d => !currentIds.has(d.id));
+                        const hasRemoved = this.recentDeployments.some(d => !newIds.has(d.id));
+                        
+                        if (hasNew || hasRemoved) {
+                            // Обновляем только если есть изменения (новые или удалённые)
+                            this.recentDeployments = newDeployments;
+                        }
+                        // Если изменений нет, не обновляем вообще - это предотвращает дёргания
+                    } catch (error) {
+                        console.error('Ошибка загрузки истории деплоев:', error);
+                    } finally {
+                        this.loading.recent = false;
+                    }
+                },
+                async loadServices() {
+                    try {
+                        // Загружаем сервисы из начальных данных или через API
+                        {% endraw %}
+                        const servicesData = {{ services_json | safe }};
+                        {% raw %}
+                        this.services = servicesData || [];
+                        
+                        // Также загружаем через API для обновления
+                        const response = await fetch('/api/services');
+                        const data = await response.json();
+                        if (data.services && data.services.length > 0) {
+                            this.services = data.services;
+                        }
+                    } catch (error) {
+                        console.error('Ошибка загрузки сервисов:', error);
+                    }
+                },
+                async refreshDeployments() {
+                    await this.loadDeployments();
+                },
+                async refreshActiveDeployments() {
+                    await this.loadActiveDeployments();
+                },
+                async refreshRecentDeployments() {
+                    try {
+                        const response = await fetch('/api/deployments?limit=50');
+                        const data = await response.json();
+                        // Исключаем активные деплои из истории
+                        const activeIds = new Set(this.activeDeployments.map(d => d.id));
+                        this.recentDeployments = (data.deployments || [])
+                            .filter(d => d.status !== 'running' && d.status !== 'queued' && !activeIds.has(d.id))
+                            .slice(0, 20);
+                    } catch (error) {
+                        console.error('Ошибка загрузки истории деплоев:', error);
+                    }
+                },
+                updateDeploymentStatus(payload) {
+                    const deployment = this.activeDeployments.find(d => d.id === payload.id);
+                    if (deployment) {
+                        deployment.status = payload.status;
+                        deployment.exit_code = payload.exit_code;
+                        // Перемещаем в историю через некоторое время (тихо, без перезагрузки)
+                        setTimeout(() => {
+                            this.refreshActiveDeploymentsSilent();
+                            // Обновляем историю только если деплой завершён
+                            if (payload.status === 'success' || payload.status === 'failed') {
+                                this.refreshRecentDeployments();
+                            }
+                        }, 2000);
+                    }
+                },
+                async deployService(serviceId) {
+                    // Добавляем сервис в список запускающихся
+                    if (this.deployingServices.includes(serviceId)) {
+                        return;
+                    }
+                    this.deployingServices.push(serviceId);
+                    
+                    try {
+                        const response = await fetch(`/api/services/${serviceId}/deploy`, {
+                            method: 'POST'
+                        });
+                        
+                        if (!response.ok) {
+                            const error = await response.json();
+                            alert(`Ошибка запуска деплоя: ${error.detail || 'Неизвестная ошибка'}`);
+                            return;
+                        }
+                        
+                        const data = await response.json();
+                        console.log('Деплой запущен:', data);
+                        
+                        // Обновляем список активных деплоев
+                        await this.refreshActiveDeployments();
+                    } catch (error) {
+                        console.error('Ошибка запуска деплоя:', error);
+                        alert('Ошибка запуска деплоя: ' + error.message);
+                    } finally {
+                        // Удаляем сервис из списка запускающихся
+                        const index = this.deployingServices.indexOf(serviceId);
+                        if (index > -1) {
+                            this.deployingServices.splice(index, 1);
+                        }
+                    }
+                },
+                async showLogsDrawer(deploymentId) {
+                    // Находим деплой
+                    let deployment = this.activeDeployments.find(d => d.id === deploymentId);
+                    if (!deployment) {
+                        deployment = this.recentDeployments.find(d => d.id === deploymentId);
+                    }
+                    
+                    if (!deployment) {
+                        // Загружаем деплой через API
+                        try {
+                            const response = await fetch(`/api/deployments/${deploymentId}`);
+                            const data = await response.json();
+                            deployment = data;
+                        } catch (error) {
+                            console.error('Ошибка загрузки деплоя:', error);
+                            return;
+                        }
+                    }
+                    
+                    this.logsDrawerDeployment = deployment;
+                    this.logsDrawerLogs = [];
+                    
+                    // Загружаем логи
+                    if (deployment.status === 'running' || deployment.status === 'queued') {
+                        // Подключаемся к SSE для активных деплоев
+                        this.logsDrawerEventSource = new EventSource(`/api/deployments/${deploymentId}/logs`);
+                        
+                        this.logsDrawerEventSource.onmessage = (event) => {
+                            const data = JSON.parse(event.data);
+                            
+                            if (data.type === 'status') {
+                                this.logsDrawerEventSource.close();
+                                this.logsDrawerEventSource = null;
+                                return;
+                            }
+                            
+                            this.logsDrawerLogs.push({
+                                type: data.type,
+                                line: data.line
+                            });
+                            
+                            // Автопрокрутка
+                            this.$nextTick(() => {
+                                const drawer = document.querySelector('.logs-drawer-content');
+                                if (drawer) {
+                                    drawer.scrollTop = drawer.scrollHeight;
+                                }
+                            });
+                        };
+                        
+                        this.logsDrawerEventSource.onerror = (error) => {
+                            console.error('Ошибка SSE:', error);
+                            this.logsDrawerEventSource.close();
+                            this.logsDrawerEventSource = null;
+                        };
+                    } else {
+                        // Загружаем логи из данных деплоя
+                        if (deployment.stdout) {
+                            deployment.stdout.split('\n').forEach(line => {
+                                if (line.trim()) {
+                                    this.logsDrawerLogs.push({ type: 'stdout', line: line });
+                                }
+                            });
+                        }
+                        if (deployment.stderr) {
+                            deployment.stderr.split('\n').forEach(line => {
+                                if (line.trim()) {
+                                    this.logsDrawerLogs.push({ type: 'stderr', line: line });
+                                }
+                            });
+                        }
+                    }
+                    
+                    this.logsDrawerOpen = true;
+                },
+                closeLogsDrawer() {
+                    if (this.logsDrawerEventSource) {
+                        this.logsDrawerEventSource.close();
+                        this.logsDrawerEventSource = null;
+                    }
+                    this.logsDrawerOpen = false;
+                    this.logsDrawerDeployment = null;
+                    this.logsDrawerLogs = [];
+                },
+                getServiceName(deployment) {
+                    if (!deployment) return '';
+                    if (deployment.service_name) return deployment.service_name;
+                    const service = this.services.find(s => s.id === deployment.service_id);
+                    return service ? service.name : 'Unknown';
+                }
+            }
+        }).mount('#app');
+    </script>
+    {% endraw %}
+</body>
+</html>
