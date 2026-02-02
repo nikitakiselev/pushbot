@@ -35,5 +35,6 @@ class Deployment(Base):
     commit_sha = Column(String, nullable=True)
     commit_message = Column(String, nullable=True)
     branch = Column(String, nullable=True)
+    triggered_by = Column(String, nullable=True)  # 'manual' или 'webhook'
 
     service = relationship("Service", back_populates="deployments")

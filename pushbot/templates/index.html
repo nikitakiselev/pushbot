@@ -1,59 +1,95 @@
 <!DOCTYPE html>
 <html lang="ru">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PushBot - Мониторинг деплоев</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
-    <script>
-        tailwind.config = {
-            theme: {
-                extend: {
-                    colors: {
-                        'primary': '#2c3e50',
-                        'primary-light': '#3498db',
-                        'success': '#27ae60',
-                        'danger': '#e74c3c',
-                    }
-                }
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>PushBot - Мониторинг деплоев</title>
+        <script src="https://cdn.tailwindcss.com"></script>
+        <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+        <style>
+            @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap');
+            * {
+                font-family: 'JetBrains Mono', 'Courier New', monospace;
             }
-        }
-    </script>
-</head>
-<body class="bg-gray-100 text-gray-800 font-sans leading-relaxed">
+            body {
+                background: #0d1117;
+                color: #7ee787;
+            }
+            .terminal-border {
+                border: 1px solid #30363d;
+                background: #161b22;
+            }
+            .terminal-bg {
+                background: #161b22;
+                border: 1px solid #30363d;
+            }
+            .terminal-header {
+                background: #0d1117;
+                border-bottom: 1px dotted #30363d;
+                color: #7ee787;
+            }
+            .terminal-divider {
+                border-bottom: 1px dotted #30363d;
+            }
+            .terminal-button {
+                background: transparent;
+                border: none;
+                color: #7ee787;
+                padding: 0;
+                margin: 0;
+            }
+            .terminal-button:hover {
+                color: #58a6ff;
+            }
+            .terminal-button:disabled {
+                color: #484f58;
+            }
+        </style>
+    </head>
+    <body class="bg-[#0d1117] text-[#7ee787] font-mono">
     {% raw %}
     <div id="app" class="relative">
-        <header class="bg-primary text-white py-5 mb-8 shadow-md">
+        <header class="terminal-header py-4 mb-6">
             <div class="container mx-auto max-w-7xl px-5">
-                <h1 class="text-center text-3xl font-bold">🚀 PushBot - Мониторинг деплоев</h1>
+                <h1 class="text-center text-xl font-semibold">
+                    <span class="text-[#7ee787]">$</span>
+                    <span class="text-[#58a6ff] ml-2">pushbot</span>
+                    <span class="text-[#8b949e] ml-2">monitoring deployments</span>
+                </h1>
             </div>
         </header>
 
         <div class="container mx-auto max-w-7xl px-5">
             <!-- Деплои -->
-            <div class="bg-white rounded-lg p-5 mb-5 shadow-md">
-                <h2 class="text-xl font-semibold text-primary mb-4 pb-2 border-b-2 border-primary-light">
-                    Деплои
-                </h2>
-                <button 
-                    class="bg-primary-light hover:bg-blue-600 disabled:bg-gray-400 disabled:cursor-not-allowed text-white px-5 py-2 rounded text-sm mb-4 transition-colors duration-300"
-                    @click="refreshDeployments"
-                    :disabled="loading.deployments"
-                >
-                    {{ loading.deployments ? 'Загрузка...' : 'Обновить' }}
-                </button>
-                <!-- Отладочная информация (временно) -->
-                <div v-if="false" class="text-xs text-gray-400 mb-2 p-2 bg-gray-100 rounded">
-                    Debug: active={{ activeDeployments.length }}, recent={{ recentDeployments.length }}, all={{ allDeployments.length }}, loading={{ loading.deployments }}
+            <div class="terminal-bg p-4 mb-4">
+                <div class="flex items-center justify-between mb-4 pb-2 terminal-divider">
+                    <h2 class="text-base font-semibold text-[#7ee787]">
+                        <span class="text-[#f0883e]">$</span> deployments
+                    </h2>
+                    <div class="flex items-center gap-2">
+                        <button 
+                            class="terminal-button text-sm"
+                            @click="refreshDeployments"
+                            :disabled="loading.deployments"
+                        >
+                            [{{ loading.deployments ? 'LOADING...' : 'REFRESH' }}]
+                        </button>
+                        <button 
+                            class="terminal-button text-sm"
+                            @click="clearDeployments"
+                            :disabled="loading.clearing"
+                        >
+                            [{{ loading.clearing ? 'CLEARING...' : 'CLEAR DEPLOYS' }}]
+                        </button>
+                    </div>
                 </div>
-                <div v-if="allDeployments.length === 0 && !loading.deployments" class="text-center py-10 text-gray-500">
-                    Нет деплоев
+                <div v-if="allDeployments.length === 0 && !loading.deployments" class="text-center py-10 text-[#8b949e]">
+                    <span class="text-[#f0883e]">[INFO]</span> <span class="text-[#7ee787]">No deployments found</span>
                 </div>
-                <div v-else-if="loading.deployments" class="text-center py-10 text-gray-500">
-                    Загрузка...
+                <div v-else-if="loading.deployments" class="text-center py-10 text-[#8b949e]">
+                    <span class="text-[#f0883e]">[LOADING]</span> <span class="text-[#7ee787]">Fetching data...</span>
                 </div>
-                <div v-else class="space-y-2">
+                <div v-else class="space-y-1">
                     <!-- Активные деплои (сверху, с жёлтой рамкой) -->
                     <template v-if="activeDeployments.length > 0">
                         <deployment-history-item
@@ -78,30 +114,41 @@
                         />
                     </template>
                 </div>
+                <div v-if="hasMoreDeployments && recentDeployments.length > 0 && !loading.deployments" class="mt-4 text-center">
+                        <button 
+                            @click="loadMoreDeployments"
+                            :disabled="loading.more"
+                            class="terminal-button text-sm"
+                        >
+                        [{{ loading.more ? 'LOADING...' : 'LOAD MORE +10' }}]
+                    </button>
+                </div>
             </div>
 
             <!-- Список сервисов -->
-            <div class="bg-white rounded-lg p-5 mb-5 shadow-md">
-                <h2 class="text-xl font-semibold text-primary mb-4 pb-2 border-b-2 border-primary-light">
-                    Настроенные сервисы
-                </h2>
-                <div v-if="services.length === 0" class="text-center py-10 text-gray-500">
-                    Нет настроенных сервисов
+            <div class="terminal-bg p-4 mb-4">
+                <div class="mb-4 pb-2 terminal-divider">
+                    <h2 class="text-base font-semibold text-[#7ee787]">
+                        <span class="text-[#f0883e]">$</span> services
+                    </h2>
                 </div>
-                <div v-else class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                    <div v-for="service in services" :key="service.id" class="border border-gray-300 rounded-lg p-4 bg-gray-50">
-                        <h3 class="text-lg font-semibold text-primary mb-2">{{ service.name }}</h3>
-                        <div class="text-sm text-gray-600 mb-3">
-                            <p class="mb-1"><span class="font-bold text-gray-800">Репозиторий:</span> {{ service.repository }}</p>
-                            <p class="mb-1"><span class="font-bold text-gray-800">Путь:</span> {{ service.path }}</p>
-                            <p class="mb-1"><span class="font-bold text-gray-800">Ветка:</span> {{ service.branch }}</p>
+                <div v-if="services.length === 0" class="text-center py-10 text-[#8b949e]">
+                    <span class="text-[#f0883e]">INFO:</span> <span class="text-[#7ee787]">No services configured</span>
+                </div>
+                <div v-else class="space-y-2">
+                    <div v-for="service in services" :key="service.id" class="terminal-border p-3">
+                        <h3 class="text-sm font-semibold text-[#f0883e] mb-2">{{ service.name }}</h3>
+                        <div class="text-xs text-[#8b949e] mb-3 space-y-1">
+                            <p><span class="text-[#58a6ff]">repo:</span> <span class="text-[#7ee787]">{{ service.repository }}</span></p>
+                            <p><span class="text-[#58a6ff]">path:</span> <span class="text-[#7ee787]">{{ service.path }}</span></p>
+                            <p><span class="text-[#58a6ff]">branch:</span> <span class="text-[#7ee787]">{{ service.branch }}</span></p>
                         </div>
                         <button 
-                            @click="deployService(service.id)"
+                            @click="deployService(service.id)" 
                             :disabled="deployingServices.includes(service.id)"
-                            class="w-full bg-primary-light hover:bg-blue-600 disabled:bg-gray-400 disabled:cursor-not-allowed text-white px-4 py-2 rounded text-sm transition-colors duration-300"
+                            class="w-full terminal-button text-xs"
                         >
-                            {{ deployingServices.includes(service.id) ? 'Запуск...' : 'Запустить деплой' }}
+                            [{{ deployingServices.includes(service.id) ? 'DEPLOYING...' : 'DEPLOY' }}]
                         </button>
                     </div>
                 </div>
@@ -115,47 +162,47 @@
         >
             <!-- Overlay -->
             <div 
-                class="absolute inset-0 bg-black bg-opacity-50 transition-opacity"
+                class="absolute inset-0 bg-black bg-opacity-70"
                 @click="closeLogsDrawer"
             ></div>
             
             <!-- Drawer панель -->
             <div 
-                class="absolute right-0 top-0 h-full w-full max-w-3xl bg-white shadow-xl transform transition-transform duration-300 ease-in-out flex flex-col"
+                class="absolute right-0 top-0 h-full w-full max-w-3xl bg-[#161b22] terminal-border flex flex-col"
                 @click.stop
             >
                 <!-- Header -->
-                <div class="flex items-center justify-between p-4 border-b bg-gray-50">
+                <div class="flex items-center justify-between p-3 terminal-divider bg-[#161b22]">
                     <div>
-                        <h3 class="text-lg font-semibold text-gray-800">
-                            {{ getServiceName(logsDrawerDeployment) || 'Логи деплоя' }}
+                        <h3 class="text-sm font-semibold text-[#f0883e]">
+                            <span class="text-[#7ee787]">$</span> {{ getServiceName(logsDrawerDeployment) || 'deployment logs' }}
                         </h3>
-                        <p class="text-sm text-gray-500" v-if="logsDrawerDeployment">
-                            {{ logsDrawerDeployment.status === 'running' ? 'Выполняется' : logsDrawerDeployment.status === 'queued' ? 'В очереди' : logsDrawerDeployment.status === 'success' ? 'Успешно' : logsDrawerDeployment.status === 'failed' ? 'Ошибка' : 'Завершен' }}
-                            <span v-if="logsDrawerDeployment.commit_sha" class="ml-2 font-mono text-xs">
+                        <p class="text-xs text-[#8b949e] mt-1" v-if="logsDrawerDeployment">
+                            <span :class="logsDrawerDeployment.status === 'running' ? 'text-[#58a6ff]' : logsDrawerDeployment.status === 'queued' ? 'text-[#f0883e]' : logsDrawerDeployment.status === 'success' ? 'text-[#7ee787]' : logsDrawerDeployment.status === 'failed' ? 'text-[#f85149]' : 'text-[#8b949e]'">
+                                {{ getStatusText(logsDrawerDeployment.status) }}
+                            </span>
+                            <span v-if="logsDrawerDeployment.commit_sha" class="ml-2 font-mono text-[#8b949e]">
                                 {{ logsDrawerDeployment.commit_sha.substring(0, 7) }}
                             </span>
                         </p>
                     </div>
                     <button 
                         @click="closeLogsDrawer"
-                        class="text-gray-500 hover:text-gray-700 p-2 rounded hover:bg-gray-200 transition-colors"
+                        class="terminal-button text-xs"
                     >
-                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
-                        </svg>
+                        [CLOSE]
                     </button>
                 </div>
                 
                 <!-- Логи -->
-                <div class="flex-1 overflow-y-auto bg-gray-900 text-gray-300 p-4 font-mono text-sm logs-drawer-content">
-                    <div v-if="logsDrawerLogs.length === 0" class="text-gray-500 text-center py-8">
-                        {{ logsDrawerDeployment && (logsDrawerDeployment.status === 'running' || logsDrawerDeployment.status === 'queued') ? 'Загрузка логов...' : 'Логи отсутствуют' }}
+                <div class="flex-1 overflow-y-auto bg-[#0d1117] text-[#7ee787] p-4 font-mono text-xs logs-drawer-content">
+                    <div v-if="logsDrawerLogs.length === 0" class="text-[#f0883e] text-center py-8">
+                        {{ logsDrawerDeployment && (logsDrawerDeployment.status === 'running' || logsDrawerDeployment.status === 'queued') ? 'LOADING LOGS...' : 'NO LOGS' }}
                     </div>
                     <div 
                         v-for="(log, index) in logsDrawerLogs" 
                         :key="index"
-                        :class="['my-1 whitespace-pre-wrap break-words', log.type === 'stderr' ? 'text-red-400' : 'text-gray-300']"
+                        :class="['my-0.5 whitespace-pre-wrap break-words', log.type === 'stderr' ? 'text-[#f85149]' : 'text-[#7ee787]']"
                     >
                         {{ log.line }}
                     </div>
@@ -186,12 +233,12 @@
                 },
                 statusText() {
                     const statusMap = {
-                        'queued': 'В очереди',
-                        'running': 'Выполняется',
-                        'success': 'Успешно',
-                        'failed': 'Ошибка'
+                        'queued': 'QUEUED',
+                        'running': 'IN PROGRESS',
+                        'success': 'SUCCESS',
+                        'failed': 'FAIL'
                     };
-                    return statusMap[this.deployment.status] || this.deployment.status;
+                    return statusMap[this.deployment.status] || this.deployment.status.toUpperCase();
                 },
                 statusBadgeClass() {
                     const classes = {
@@ -380,30 +427,30 @@
                 },
                 statusText() {
                     const statusMap = {
-                        'queued': 'В очереди',
-                        'running': 'Выполняется',
-                        'success': 'Успешно',
-                        'failed': 'Ошибка'
+                        'queued': 'QUEUED',
+                        'running': 'IN PROGRESS',
+                        'success': 'SUCCESS',
+                        'failed': 'FAIL'
                     };
-                    return statusMap[this.deployment.status] || this.deployment.status;
+                    return statusMap[this.deployment.status] || this.deployment.status.toUpperCase();
                 },
                 statusBadgeClass() {
                     const classes = {
-                        'queued': 'bg-yellow-500 text-white',
-                        'running': 'bg-primary-light text-white',
-                        'success': 'bg-success text-white',
-                        'failed': 'bg-danger text-white'
+                        'queued': 'text-[#f0883e]',
+                        'running': 'text-[#58a6ff]',
+                        'success': 'text-[#7ee787]',
+                        'failed': 'text-[#f85149]'
                     };
-                    return classes[this.deployment.status] || 'bg-gray-500 text-white';
+                    return classes[this.deployment.status] || 'text-[#8b949e]';
                 },
                 borderClass() {
                     const classes = {
-                        'queued': 'border-l-2 border-yellow-500',
-                        'running': 'border-l-2 border-primary-light',
-                        'success': 'border-l-2 border-success',
-                        'failed': 'border-l-2 border-danger'
+                        'queued': 'border-l-2 border-dotted border-[#f0883e]',
+                        'running': 'border-l-2 border-dotted border-[#58a6ff]',
+                        'success': 'border-l-2 border-dotted border-[#7ee787]',
+                        'failed': 'border-l-2 border-dotted border-[#f85149]'
                     };
-                    return classes[this.deployment.status] || 'border-l-2 border-gray-400';
+                    return classes[this.deployment.status] || 'border-l-2 border-dotted border-[#30363d]';
                 },
                 formattedStartTime() {
                     if (!this.deployment.started_at) return '';
@@ -412,7 +459,8 @@
                         day: '2-digit', 
                         month: '2-digit', 
                         hour: '2-digit', 
-                        minute: '2-digit' 
+                        minute: '2-digit',
+                        second: '2-digit'
                     });
                 },
                 formattedEndTime() {
@@ -422,7 +470,8 @@
                         day: '2-digit', 
                         month: '2-digit', 
                         hour: '2-digit', 
-                        minute: '2-digit' 
+                        minute: '2-digit',
+                        second: '2-digit'
                     });
                 },
                 shortCommitSha() {
@@ -499,30 +548,26 @@
                 }
             },
             template: `
-                <div :class="['border rounded p-2 bg-white hover:bg-gray-50 transition-colors', borderClass, isActive && (deployment.status === 'running' || deployment.status === 'queued') ? 'border-yellow-400 border-2' : 'border-gray-200']">
-                    <div class="flex items-center justify-between gap-2">
-                        <div class="flex items-center gap-3 flex-1 min-w-0">
-                            <span class="font-semibold text-sm text-gray-800 truncate">{{ serviceName }}</span>
-                            <span :class="['px-2 py-0.5 rounded text-xs font-bold uppercase whitespace-nowrap', statusBadgeClass]">
+                <div 
+                    :class="['hover:bg-[#21262d] cursor-pointer', isActive && (deployment.status === 'running' || deployment.status === 'queued') ? 'border-[#f0883e] border-2 border-dotted' : '']"
+                    @click="$emit('show-logs', deployment.id)"
+                >
+                    <div class="flex items-center justify-between gap-2 text-sm">
+                        <div class="flex items-center gap-2 flex-1 min-w-0">
+                            <span class="text-[#7ee787]">></span>
+                            <span class="font-semibold text-[#f0883e]">{{ serviceName }}</span>
+                            <span :class="['font-semibold whitespace-nowrap', statusBadgeClass]">
                                 {{ statusText }}
                             </span>
-                            <span class="text-xs text-gray-500 whitespace-nowrap">{{ formattedStartTime }}</span>
-                            <span v-if="formattedEndTime" class="text-xs text-gray-500 whitespace-nowrap">→ {{ formattedEndTime }}</span>
-                            <span v-if="duration" class="text-xs text-gray-400 whitespace-nowrap">({{ duration }})</span>
-                            <span v-if="shortCommitSha" class="text-xs text-gray-400 font-mono whitespace-nowrap">{{ shortCommitSha }}</span>
-                            <span v-if="deployment.branch" class="text-xs text-gray-400 whitespace-nowrap">{{ deployment.branch }}</span>
+                            <span v-if="deployment.branch" class="text-[#8b949e] whitespace-nowrap">{{ deployment.branch }}</span>
                             <span v-if="deployment.exit_code !== null && deployment.exit_code !== undefined" 
-                                  :class="['text-xs whitespace-nowrap', deployment.exit_code === 0 ? 'text-gray-500' : 'text-red-600']">
-                                код: {{ deployment.exit_code }}
+                                  :class="['whitespace-nowrap', deployment.exit_code === 0 ? 'text-[#7ee787]' : 'text-[#f85149]']">
+                                Exit Code: {{ deployment.exit_code }}
                             </span>
                         </div>
-                        <button 
-                            v-if="isActive || logs.length > 0 || deployment.stdout || deployment.stderr"
-                            @click="$emit('show-logs', deployment.id)"
-                            class="ml-auto text-xs text-primary-light hover:text-blue-700 font-medium cursor-pointer"
-                        >
-                            Логи →
-                        </button>
+                        <span class="text-[#8b949e] whitespace-nowrap">
+                            {{ formattedStartTime }}<span v-if="duration" class="text-[#58a6ff]"> ({{ duration }})</span>
+                        </span>
                     </div>
                 </div>
             `
@@ -540,7 +585,9 @@
                     recentDeployments: [],
                     services: [],
                     loading: {
-                        deployments: false
+                        deployments: false,
+                        more: false,
+                        clearing: false
                     },
                     refreshInterval: null,
                     deployingServices: [],
@@ -548,14 +595,14 @@
                     logsDrawerDeployment: null,
                     logsDrawerLogs: [],
                     logsDrawerEventSource: null,
-                    escHandler: null
+                    escHandler: null,
+                    deploymentsLimit: 10,
+                    hasMoreDeployments: true
                 };
             },
             computed: {
                 allDeployments() {
-                    const all = [...this.activeDeployments, ...this.recentDeployments];
-                    console.log('Computed allDeployments:', all.length, 'active:', this.activeDeployments.length, 'recent:', this.recentDeployments.length);
-                    return all;
+                    return [...this.activeDeployments, ...this.recentDeployments];
                 }
             },
             mounted() {
@@ -589,16 +636,14 @@
                 },
                 async loadDeployments() {
                     this.loading.deployments = true;
+                    this.deploymentsLimit = 10;
                     try {
                         const [activeResponse, recentResponse] = await Promise.all([
                             fetch('/api/deployments/active'),
-                            fetch('/api/deployments?limit=50')
+                            fetch(`/api/deployments?limit=${this.deploymentsLimit + 1}`)
                         ]);
                         const activeData = await activeResponse.json();
                         const recentData = await recentResponse.json();
-                        
-                        console.log('Active deployments from API:', activeData);
-                        console.log('Recent deployments from API:', recentData);
                         
                         // Используем Vue.set или прямое присваивание для реактивности
                         const activeList = activeData.active_deployments || [];
@@ -607,20 +652,57 @@
                         // Исключаем активные деплои из истории
                         const activeIds = new Set(activeList.map(d => d.id));
                         const filteredRecent = recentList
-                            .filter(d => d.status !== 'running' && d.status !== 'queued' && !activeIds.has(d.id))
-                            .slice(0, 20);
+                            .filter(d => d.status !== 'running' && d.status !== 'queued' && !activeIds.has(d.id));
+                        
+                        // Проверяем, есть ли ещё деплои (если вернулось больше, чем лимит)
+                        this.hasMoreDeployments = filteredRecent.length > this.deploymentsLimit;
+                        
+                        // Берём только нужное количество
+                        const limitedRecent = filteredRecent.slice(0, this.deploymentsLimit);
                         
                         // Присваиваем массивы напрямую для правильной реактивности
                         this.activeDeployments.splice(0, this.activeDeployments.length, ...activeList);
-                        this.recentDeployments.splice(0, this.recentDeployments.length, ...filteredRecent);
-                        
-                        console.log('Active deployments after processing:', this.activeDeployments.length);
-                        console.log('Recent deployments after processing:', this.recentDeployments.length);
-                        console.log('All deployments count:', this.allDeployments.length);
+                        this.recentDeployments.splice(0, this.recentDeployments.length, ...limitedRecent);
                     } catch (error) {
                         console.error('Ошибка загрузки деплоев:', error);
                     } finally {
                         this.loading.deployments = false;
+                    }
+                },
+                async loadMoreDeployments() {
+                    this.loading.more = true;
+                    const newLimit = this.deploymentsLimit + 10;
+                    try {
+                        const [activeResponse, recentResponse] = await Promise.all([
+                            fetch('/api/deployments/active'),
+                            fetch(`/api/deployments?limit=${newLimit + 1}`)
+                        ]);
+                        const activeData = await activeResponse.json();
+                        const recentData = await recentResponse.json();
+                        
+                        const activeList = activeData.active_deployments || [];
+                        const recentList = recentData.deployments || [];
+                        
+                        // Исключаем активные деплои из истории
+                        const activeIds = new Set(activeList.map(d => d.id));
+                        const filteredRecent = recentList
+                            .filter(d => d.status !== 'running' && d.status !== 'queued' && !activeIds.has(d.id));
+                        
+                        // Проверяем, есть ли ещё деплои (если вернулось больше, чем новый лимит)
+                        this.hasMoreDeployments = filteredRecent.length > newLimit;
+                        
+                        // Обновляем лимит
+                        this.deploymentsLimit = newLimit;
+                        
+                        // Берём только нужное количество
+                        const limitedRecent = filteredRecent.slice(0, this.deploymentsLimit);
+                        
+                        // Обновляем только историю, активные деплои не меняем
+                        this.recentDeployments.splice(0, this.recentDeployments.length, ...limitedRecent);
+                    } catch (error) {
+                        console.error('Ошибка загрузки дополнительных деплоев:', error);
+                    } finally {
+                        this.loading.more = false;
                     }
                 },
                 async loadActiveDeployments() {
@@ -729,18 +811,46 @@
                 async refreshDeployments() {
                     await this.loadDeployments();
                 },
+                async clearDeployments() {
+                    if (!confirm('Are you sure you want to clear all completed deployments?')) {
+                        return;
+                    }
+                    this.loading.clearing = true;
+                    try {
+                        const response = await fetch('/api/deployments/clear', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json'
+                            }
+                        });
+                        
+                        if (!response.ok) {
+                            const error = await response.json();
+                            alert(`Ошибка очистки деплоев: ${error.detail || 'Неизвестная ошибка'}`);
+                            return;
+                        }
+                        
+                        // Обновляем список деплоев после очистки
+                        await this.loadDeployments();
+                    } catch (error) {
+                        console.error('Ошибка очистки деплоев:', error);
+                        alert('Ошибка очистки деплоев: ' + error.message);
+                    } finally {
+                        this.loading.clearing = false;
+                    }
+                },
                 async refreshActiveDeployments() {
                     await this.loadActiveDeployments();
                 },
                 async refreshRecentDeployments() {
                     try {
-                        const response = await fetch('/api/deployments?limit=50');
+                        const response = await fetch(`/api/deployments?limit=${this.deploymentsLimit}`);
                         const data = await response.json();
                         // Исключаем активные деплои из истории
                         const activeIds = new Set(this.activeDeployments.map(d => d.id));
                         this.recentDeployments = (data.deployments || [])
                             .filter(d => d.status !== 'running' && d.status !== 'queued' && !activeIds.has(d.id))
-                            .slice(0, 20);
+                            .slice(0, this.deploymentsLimit);
                     } catch (error) {
                         console.error('Ошибка загрузки истории деплоев:', error);
                     }
@@ -883,6 +993,15 @@
                     if (deployment.service_name) return deployment.service_name;
                     const service = this.services.find(s => s.id === deployment.service_id);
                     return service ? service.name : 'Unknown';
+                },
+                getStatusText(status) {
+                    const statusMap = {
+                        'queued': 'QUEUED',
+                        'running': 'IN PROGRESS',
+                        'success': 'SUCCESS',
+                        'failed': 'FAIL'
+                    };
+                    return statusMap[status] || status.toUpperCase();
                 }
             }
         }).mount('#app');

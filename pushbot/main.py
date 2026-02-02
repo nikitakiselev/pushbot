@@ -301,28 +301,24 @@ async def get_deployment_logs(deployment_id: int, db: Session = Depends(get_db))
         """Генератор для Server-Sent Events."""
         runner = get_active_deployment(deployment_id)
         if runner:
-            # Если деплой активен, отправляем логи из буфера
-            for line in runner.stdout_buffer:
-                yield f"data: {json.dumps({'type': 'stdout', 'line': line}, ensure_ascii=False)}\n\n"
-            for line in runner.stderr_buffer:
-                yield f"data: {json.dumps({'type': 'stderr', 'line': line}, ensure_ascii=False)}\n\n"
+            # Если деплой активен, отправляем логи из упорядоченного буфера
+            sorted_logs = sorted(runner.ordered_logs, key=lambda x: x[0])
+            for _, line, stream_type in sorted_logs:
+                yield f"data: {json.dumps({'type': stream_type, 'line': line}, ensure_ascii=False)}\n\n"
             
             # Отправляем обновления в реальном времени
-            last_stdout_len = len(runner.stdout_buffer)
-            last_stderr_len = len(runner.stderr_buffer)
+            last_logs_count = len(runner.ordered_logs)
             while True:
                 await asyncio.sleep(0.5)
                 
-                # Проверяем новые строки
-                if len(runner.stdout_buffer) > last_stdout_len:
-                    for line in runner.stdout_buffer[last_stdout_len:]:
-                        yield f"data: {json.dumps({'type': 'stdout', 'line': line}, ensure_ascii=False)}\n\n"
-                    last_stdout_len = len(runner.stdout_buffer)
-                
-                if len(runner.stderr_buffer) > last_stderr_len:
-                    for line in runner.stderr_buffer[last_stderr_len:]:
-                        yield f"data: {json.dumps({'type': 'stderr', 'line': line}, ensure_ascii=False)}\n\n"
-                    last_stderr_len = len(runner.stderr_buffer)
+                # Проверяем новые строки в упорядоченном буфере
+                if len(runner.ordered_logs) > last_logs_count:
+                    # Сортируем только новые логи и отправляем их
+                    new_logs = runner.ordered_logs[last_logs_count:]
+                    new_logs_sorted = sorted(new_logs, key=lambda x: x[0])
+                    for _, line, stream_type in new_logs_sorted:
+                        yield f"data: {json.dumps({'type': stream_type, 'line': line}, ensure_ascii=False)}\n\n"
+                    last_logs_count = len(runner.ordered_logs)
                 
                 # Проверяем, завершен ли деплой
                 from pushbot.database import SessionLocal
@@ -340,13 +336,13 @@ async def get_deployment_logs(deployment_id: int, db: Session = Depends(get_db))
             newline = '\n'
             if deployment.stdout:
                 for line in deployment.stdout.split("\n"):
-                    if line:
-                        line_with_newline = line + newline
+                    if line.strip():
+                        line_with_newline = line + newline if not line.endswith('\n') else line
                         yield f"data: {json.dumps({'type': 'stdout', 'line': line_with_newline}, ensure_ascii=False)}\n\n"
             if deployment.stderr:
                 for line in deployment.stderr.split("\n"):
-                    if line:
-                        line_with_newline = line + newline
+                    if line.strip():
+                        line_with_newline = line + newline if not line.endswith('\n') else line
                         yield f"data: {json.dumps({'type': 'stderr', 'line': line_with_newline}, ensure_ascii=False)}\n\n"
             # Отправляем финальный статус
             yield f"data: {json.dumps({'type': 'status', 'status': deployment.status, 'exit_code': deployment.exit_code}, ensure_ascii=False)}\n\n"
@@ -455,12 +451,29 @@ async def deploy_service(service_id: int, db: Session = Depends(get_db)):
         commit_sha=None,
         commit_message="Ручной запуск деплоя",
         branch=service.branch,
+        triggered_by="manual",
     )
     
     return {
         "message": "Деплой запущен",
         "deployment_id": deployment_id,
         "service": service.name,
+    }
+
+
+@app.post("/api/deployments/clear")
+async def clear_deployments(db: Session = Depends(get_db)):
+    """API для очистки завершенных деплоев (success и failed)."""
+    # Удаляем только завершенные деплои (success и failed), не трогая активные (running, queued)
+    deleted_count = db.query(Deployment).filter(
+        Deployment.status.in_(["success", "failed"])
+    ).delete()
+    
+    db.commit()
+    
+    return {
+        "message": f"Удалено завершенных деплоев: {deleted_count}",
+        "deleted_count": deleted_count
     }
 
 

@@ -119,6 +119,7 @@ async def handle_github_webhook(
         commit_sha=commit_sha,
         commit_message=commit_message,
         branch=branch,
+        triggered_by="webhook",
     )
 
     return {
