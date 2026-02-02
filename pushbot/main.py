@@ -17,6 +17,44 @@ from pushbot.deployer import get_all_active_deployments, get_active_deployment
 app_config: AppConfig = None
 
 
+def sync_services_from_config(db: Session, config: AppConfig):
+    """Синхронизировать сервисы из конфигурации с базой данных."""
+    # Получаем список имен сервисов из конфигурации
+    config_service_names = {s.name for s in config.services}
+    
+    # Получаем все сервисы из базы данных
+    db_services = db.query(Service).all()
+    
+    # Удаляем сервисы, которых нет в конфигурации
+    # Сначала удаляем связанные деплои, чтобы избежать нарушения ограничений
+    for db_service in db_services:
+        if db_service.name not in config_service_names:
+            # Удаляем все деплои, связанные с этим сервисом
+            db.query(Deployment).filter(Deployment.service_id == db_service.id).delete()
+            # Теперь можно безопасно удалить сервис
+            db.delete(db_service)
+    
+    # Добавляем или обновляем сервисы из конфигурации
+    for service_config in config.services:
+        service = db.query(Service).filter(Service.name == service_config.name).first()
+        if not service:
+            service = Service(
+                name=service_config.name,
+                repository=service_config.repository,
+                path=service_config.path,
+                branch=service_config.branch,
+                deploy_command=service_config.deploy_command,
+            )
+            db.add(service)
+        else:
+            # Обновляем конфигурацию
+            service.repository = service_config.repository
+            service.path = service_config.path
+            service.branch = service_config.branch
+            service.deploy_command = service_config.deploy_command
+    db.commit()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Инициализация при старте и очистка при остановке."""
@@ -28,40 +66,7 @@ async def lifespan(app: FastAPI):
     # Синхронизация сервисов из конфигурации с базой данных
     db = next(get_db())
     try:
-        # Получаем список имен сервисов из конфигурации
-        config_service_names = {s.name for s in app_config.services}
-        
-        # Получаем все сервисы из базы данных
-        db_services = db.query(Service).all()
-        
-        # Удаляем сервисы, которых нет в конфигурации
-        # Сначала удаляем связанные деплои, чтобы избежать нарушения ограничений
-        for db_service in db_services:
-            if db_service.name not in config_service_names:
-                # Удаляем все деплои, связанные с этим сервисом
-                db.query(Deployment).filter(Deployment.service_id == db_service.id).delete()
-                # Теперь можно безопасно удалить сервис
-                db.delete(db_service)
-        
-        # Добавляем или обновляем сервисы из конфигурации
-        for service_config in app_config.services:
-            service = db.query(Service).filter(Service.name == service_config.name).first()
-            if not service:
-                service = Service(
-                    name=service_config.name,
-                    repository=service_config.repository,
-                    path=service_config.path,
-                    branch=service_config.branch,
-                    deploy_command=service_config.deploy_command,
-                )
-                db.add(service)
-            else:
-                # Обновляем конфигурацию
-                service.repository = service_config.repository
-                service.path = service_config.path
-                service.branch = service_config.branch
-                service.deploy_command = service_config.deploy_command
-        db.commit()
+        sync_services_from_config(db, app_config)
     finally:
         db.close()
     yield
@@ -489,6 +494,26 @@ async def get_services(db: Session = Depends(get_db)):
         for s in services
     ]
     return {"services": result}
+
+
+@app.post("/api/config/reload")
+async def reload_config(db: Session = Depends(get_db)):
+    """API для перезагрузки конфигурации из config.yaml."""
+    global app_config
+    try:
+        # Перезагружаем конфигурацию
+        app_config = load_config()
+        # Синхронизируем сервисы с новой конфигурацией
+        sync_services_from_config(db, app_config)
+        return {
+            "message": "Конфигурация успешно перезагружена",
+            "services_count": len(app_config.services)
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Ошибка при перезагрузке конфигурации: {str(e)}"
+        )
 
 
 @app.post("/api/services/{service_id}/deploy")

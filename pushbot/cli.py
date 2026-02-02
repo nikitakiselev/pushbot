@@ -43,7 +43,10 @@ def cmd_init(args):
     repository: "owner/repo"
     path: "/path/to/project"
     branch: "master"
-    deploy_command: "echo 'Deploy command here'"
+    deploy_command: |
+      git pull &&
+      docker compose restart &&
+      echo "Deployment completed"
 """
     
     with open(config_path, 'w', encoding='utf-8') as f:

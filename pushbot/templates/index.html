@@ -147,10 +147,17 @@
 
             <!-- Список сервисов -->
             <div class="terminal-bg p-4 mb-4">
-                <div class="mb-4 pb-2 terminal-divider">
+                <div class="flex items-center justify-between mb-4 pb-2 terminal-divider">
                     <h2 class="text-base font-semibold text-[#7ee787]">
                         <span class="text-[#f0883e]">$</span> services
                     </h2>
+                    <button 
+                        class="terminal-button text-sm"
+                        @click="reloadConfig"
+                        :disabled="loading.reloadConfig"
+                    >
+                        {{ loading.reloadConfig ? '[RELOADING...]' : '[RELOAD CONFIG]' }}
+                    </button>
                 </div>
                 <div v-if="services.length === 0" class="text-center py-10 text-[#8b949e]">
                     <span class="text-[#f0883e]">INFO:</span> <span class="text-[#7ee787]">No services configured</span>
@@ -609,7 +616,8 @@
                     loading: {
                         deployments: false,
                         more: false,
-                        clearing: false
+                        clearing: false,
+                        reloadConfig: false
                     },
                     refreshInterval: null,
                     deployingServices: [],
@@ -832,6 +840,29 @@
                         }
                     } catch (error) {
                         console.error('Ошибка загрузки сервисов:', error);
+                    }
+                },
+                async reloadConfig() {
+                    this.loading.reloadConfig = true;
+                    try {
+                        const response = await fetch('/api/config/reload', {
+                            method: 'POST'
+                        });
+                        if (!response.ok) {
+                            const error = await response.json();
+                            alert(`Ошибка перезагрузки конфигурации: ${error.detail || 'Unknown error'}`);
+                            return;
+                        }
+                        const data = await response.json();
+                        console.log('Config reloaded:', data);
+                        
+                        // Перезагружаем список сервисов
+                        await this.loadServices();
+                    } catch (error) {
+                        console.error('Ошибка перезагрузки конфигурации:', error);
+                        alert('Ошибка перезагрузки конфигурации: ' + error.message);
+                    } finally {
+                        this.loading.reloadConfig = false;
                     }
                 },
                 async refreshDeployments() {
