@@ -71,6 +71,24 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="PushBot", lifespan=lifespan)
 
 from jinja2 import Environment, FileSystemLoader
+import sys
+from pathlib import Path
+
+def get_template_path():
+    """Получить путь к шаблонам (работает в бинарнике и исходниках)."""
+    if getattr(sys, 'frozen', False):
+        # Если запущено из бинарника PyInstaller
+        base_path = Path(sys._MEIPASS)
+    else:
+        # Если запущено из исходников
+        base_path = Path(__file__).parent.parent
+    
+    template_path = base_path / "pushbot" / "templates"
+    if not template_path.exists():
+        # Пробуем альтернативный путь
+        template_path = base_path / "templates"
+    
+    return str(template_path)
 
 class Jinja2Templates:
     def __init__(self, directory: str):
@@ -82,7 +100,7 @@ class Jinja2Templates:
         return HTMLResponse(content=content)
 
 
-templates = Jinja2Templates("pushbot/templates")
+templates = Jinja2Templates(get_template_path())
 
 
 @app.get("/", response_class=HTMLResponse)
