@@ -122,17 +122,19 @@ class DeploymentRunner:
             deployment.finished_at = datetime.utcnow()
             deployment.exit_code = exit_code
             
-            # Сортируем логи по времени и разделяем на stdout и stderr
+            # Сортируем логи по времени и сохраняем в правильном порядке
             if self.ordered_logs:
                 sorted_logs = sorted(self.ordered_logs, key=lambda x: x[0])
                 stdout_lines = []
                 stderr_lines = []
+                # Сохраняем логи в правильном хронологическом порядке
                 for _, line, stream_type in sorted_logs:
                     if stream_type == "stdout":
                         stdout_lines.append(line)
                     else:
                         stderr_lines.append(line)
                 
+                # Сохраняем отсортированные логи
                 deployment.stdout = "".join(stdout_lines)
                 deployment.stderr = "".join(stderr_lines)
             else:

@@ -44,11 +44,31 @@
             .terminal-button:disabled {
                 color: #484f58;
             }
+            /* Скрываем drawer до инициализации Vue.js */
+            body:not(.vue-initialized) .logs-drawer,
+            body:not(.vue-initialized) [v-if*="logsDrawerOpen"],
+            body:not(.vue-initialized) [v-show*="logsDrawerOpen"] {
+                display: none !important;
+            }
         </style>
     </head>
     <body class="bg-[#0d1117] text-[#7ee787] font-mono">
     {% raw %}
     <div id="app" class="relative">
+        <!-- Loader пока Vue.js не инициализировался -->
+        <div v-if="!isInitialized" class="fixed inset-0 bg-[#0d1117] flex items-center justify-center z-50">
+            <div class="text-center">
+                <div class="text-[#7ee787] text-xl mb-4">
+                    <span class="text-[#f0883e]">$</span> pushbot
+                </div>
+                <div class="text-[#8b949e] text-sm">
+                    [LOADING...]
+                </div>
+            </div>
+        </div>
+        
+        <!-- Основной контент -->
+        <div v-show="isInitialized">
         <header class="terminal-header py-4 mb-6">
             <div class="container mx-auto max-w-7xl px-5">
                 <h1 class="text-center text-xl font-semibold">
@@ -157,8 +177,8 @@
 
         <!-- Drawer для логов -->
         <div 
-            v-if="logsDrawerOpen"
-            class="fixed inset-0 z-50 overflow-hidden"
+            v-if="isInitialized && logsDrawerOpen"
+            class="fixed inset-0 z-50 overflow-hidden logs-drawer"
         >
             <!-- Overlay -->
             <div 
@@ -208,6 +228,7 @@
                     </div>
                 </div>
             </div>
+        </div>
         </div>
     </div>
     {% endraw %}
@@ -581,6 +602,7 @@
             },
             data() {
                 return {
+                    isInitialized: false,
                     activeDeployments: [],
                     recentDeployments: [],
                     services: [],
@@ -605,8 +627,12 @@
                     return [...this.activeDeployments, ...this.recentDeployments];
                 }
             },
-            mounted() {
-                this.loadInitialData();
+            async mounted() {
+                await this.loadInitialData();
+                // Показываем контент только после загрузки данных
+                this.isInitialized = true;
+                // Добавляем класс на body для CSS правил
+                document.body.classList.add('vue-initialized');
                 // Автообновление активных деплоев каждые 5 секунд (без перезагрузки истории)
                 this.refreshInterval = setInterval(() => {
                     this.refreshActiveDeploymentsSilent();
@@ -926,56 +952,37 @@
                     this.logsDrawerDeployment = deployment;
                     this.logsDrawerLogs = [];
                     
-                    // Загружаем логи
-                    if (deployment.status === 'running' || deployment.status === 'queued') {
-                        // Подключаемся к SSE для активных деплоев
-                        this.logsDrawerEventSource = new EventSource(`/api/deployments/${deploymentId}/logs`);
+                    // Всегда используем SSE endpoint для получения отсортированных логов
+                    this.logsDrawerEventSource = new EventSource(`/api/deployments/${deploymentId}/logs`);
+                    
+                    this.logsDrawerEventSource.onmessage = (event) => {
+                        const data = JSON.parse(event.data);
                         
-                        this.logsDrawerEventSource.onmessage = (event) => {
-                            const data = JSON.parse(event.data);
-                            
-                            if (data.type === 'status') {
-                                this.logsDrawerEventSource.close();
-                                this.logsDrawerEventSource = null;
-                                return;
-                            }
-                            
-                            this.logsDrawerLogs.push({
-                                type: data.type,
-                                line: data.line
-                            });
-                            
-                            // Автопрокрутка
-                            this.$nextTick(() => {
-                                const drawer = document.querySelector('.logs-drawer-content');
-                                if (drawer) {
-                                    drawer.scrollTop = drawer.scrollHeight;
-                                }
-                            });
-                        };
-                        
-                        this.logsDrawerEventSource.onerror = (error) => {
-                            console.error('Ошибка SSE:', error);
+                        if (data.type === 'status') {
                             this.logsDrawerEventSource.close();
                             this.logsDrawerEventSource = null;
-                        };
-                    } else {
-                        // Загружаем логи из данных деплоя
-                        if (deployment.stdout) {
-                            deployment.stdout.split('\n').forEach(line => {
-                                if (line.trim()) {
-                                    this.logsDrawerLogs.push({ type: 'stdout', line: line });
-                                }
-                            });
+                            return;
                         }
-                        if (deployment.stderr) {
-                            deployment.stderr.split('\n').forEach(line => {
-                                if (line.trim()) {
-                                    this.logsDrawerLogs.push({ type: 'stderr', line: line });
-                                }
-                            });
-                        }
-                    }
+                        
+                        this.logsDrawerLogs.push({
+                            type: data.type,
+                            line: data.line
+                        });
+                        
+                        // Автопрокрутка
+                        this.$nextTick(() => {
+                            const drawer = document.querySelector('.logs-drawer-content');
+                            if (drawer) {
+                                drawer.scrollTop = drawer.scrollHeight;
+                            }
+                        });
+                    };
+                    
+                    this.logsDrawerEventSource.onerror = (error) => {
+                        console.error('Ошибка SSE:', error);
+                        this.logsDrawerEventSource.close();
+                        this.logsDrawerEventSource = null;
+                    };
                     
                     this.logsDrawerOpen = true;
                 },

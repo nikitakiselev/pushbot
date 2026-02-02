@@ -339,55 +339,43 @@ async def get_deployment_logs(deployment_id: int, db: Session = Depends(get_db))
             all_logs = []
             newline = '\n'
             
-            # Парсим логи из stdout с временными метками (с миллисекундами)
+            def parse_timestamp_from_line(line: str) -> datetime:
+                """Извлекает временную метку из строки лога."""
+                match = re.match(r'\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d{1,3})?)\]', line)
+                if match:
+                    timestamp_str = match.group(1)
+                    try:
+                        if '.' in timestamp_str:
+                            # Нормализуем миллисекунды до 6 знаков (микросекунды)
+                            parts = timestamp_str.split('.')
+                            if len(parts) == 2:
+                                ms = parts[1].ljust(6, '0')[:6]
+                                timestamp_str_normalized = f"{parts[0]}.{ms}"
+                            else:
+                                timestamp_str_normalized = timestamp_str
+                            return datetime.strptime(timestamp_str_normalized, "%Y-%m-%d %H:%M:%S.%f")
+                        else:
+                            return datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S")
+                    except ValueError:
+                        return datetime.min
+                return datetime.min
+            
+            # Парсим все логи из stdout и stderr, объединяем и сортируем
             if deployment.stdout:
                 for line in deployment.stdout.split("\n"):
                     if line.strip():
-                        # Извлекаем временную метку из строки [YYYY-MM-DD HH:MM:SS.mmm] или [YYYY-MM-DD HH:MM:SS]
-                        match = re.match(r'\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d{1,3})?)\] (.+)', line)
-                        if match:
-                            timestamp_str, log_content = match.groups()
-                            try:
-                                # Пробуем парсить с миллисекундами
-                                if '.' in timestamp_str:
-                                    timestamp = datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S.%f")
-                                else:
-                                    timestamp = datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S")
-                                line_with_newline = line + newline if not line.endswith('\n') else line
-                                all_logs.append((timestamp, 'stdout', line_with_newline))
-                            except ValueError:
-                                line_with_newline = line + newline if not line.endswith('\n') else line
-                                all_logs.append((datetime.now(), 'stdout', line_with_newline))
-                        else:
-                            # Если нет временной метки, используем текущее время
-                            line_with_newline = line + newline if not line.endswith('\n') else line
-                            all_logs.append((datetime.now(), 'stdout', line_with_newline))
+                        timestamp = parse_timestamp_from_line(line)
+                        line_with_newline = line + newline if not line.endswith('\n') else line
+                        all_logs.append((timestamp, 'stdout', line_with_newline))
             
-            # Парсим логи из stderr с временными метками (с миллисекундами)
             if deployment.stderr:
                 for line in deployment.stderr.split("\n"):
                     if line.strip():
-                        # Извлекаем временную метку из строки [YYYY-MM-DD HH:MM:SS.mmm] или [YYYY-MM-DD HH:MM:SS]
-                        match = re.match(r'\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d{1,3})?)\] (.+)', line)
-                        if match:
-                            timestamp_str, log_content = match.groups()
-                            try:
-                                # Пробуем парсить с миллисекундами
-                                if '.' in timestamp_str:
-                                    timestamp = datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S.%f")
-                                else:
-                                    timestamp = datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S")
-                                line_with_newline = line + newline if not line.endswith('\n') else line
-                                all_logs.append((timestamp, 'stderr', line_with_newline))
-                            except ValueError:
-                                line_with_newline = line + newline if not line.endswith('\n') else line
-                                all_logs.append((datetime.now(), 'stderr', line_with_newline))
-                        else:
-                            # Если нет временной метки, используем текущее время
-                            line_with_newline = line + newline if not line.endswith('\n') else line
-                            all_logs.append((datetime.now(), 'stderr', line_with_newline))
+                        timestamp = parse_timestamp_from_line(line)
+                        line_with_newline = line + newline if not line.endswith('\n') else line
+                        all_logs.append((timestamp, 'stderr', line_with_newline))
             
-            # Сортируем по точному времени (с миллисекундами) и отправляем
+            # Сортируем только по точному времени (миллисекунды уже включены)
             all_logs.sort(key=lambda x: x[0])
             for _, log_type, log_line in all_logs:
                 yield f"data: {json.dumps({'type': log_type, 'line': log_line}, ensure_ascii=False)}\n\n"
