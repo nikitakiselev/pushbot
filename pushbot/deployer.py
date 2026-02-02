@@ -21,19 +21,21 @@ class DeploymentRunner:
         self.deployment_start_time = None
         self.triggered_by = None
 
-    def _format_log_line(self, line: str, stream_type: str = "stdout") -> str:
-        """Форматировать строку лога с временной меткой."""
+    def _format_log_line(self, timestamp: datetime, line: str, stream_type: str = "stdout") -> str:
+        """Форматировать строку лога с временной меткой (с миллисекундами для точной сортировки)."""
         if not line:
             return line
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        return f"[{timestamp}] {line}"
+        # Используем формат с миллисекундами для точной сортировки
+        timestamp_str = timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]  # Оставляем миллисекунды (3 знака)
+        return f"[{timestamp_str}] {line}"
 
     def _add_log(self, line: str, stream_type: str = "stdout", callback: Optional[Callable[[str], None]] = None):
-        """Добавить строку в лог с временной меткой."""
+        """Добавить строку в лог с точной временной меткой."""
         if not line or (isinstance(line, str) and not line.strip() and line != '\n'):
             return
+        # Сохраняем точное время с микросекундами
         timestamp = datetime.now()
-        formatted_line = self._format_log_line(line, stream_type)
+        formatted_line = self._format_log_line(timestamp, line, stream_type)
         
         # Добавляем в соответствующий буфер для обратной совместимости
         if stream_type == "stdout":
@@ -41,7 +43,7 @@ class DeploymentRunner:
         else:
             self.stderr_buffer.append(formatted_line)
         
-        # Добавляем в упорядоченный буфер
+        # Добавляем в упорядоченный буфер с точным временем
         self.ordered_logs.append((timestamp, formatted_line, stream_type))
         
         if callback:
