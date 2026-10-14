@@ -75,7 +75,7 @@ cat <<'EOF'
 
 Expose it with Caddy (Caddyfile):
 
-  deploy.example.com {
+  pushbot.example.com {
       reverse_proxy 127.0.0.1:9800 {
           flush_interval -1
       }

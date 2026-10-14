@@ -159,7 +159,7 @@ jobs:
 
       - uses: nikitakiselev/pushbot@v1
         with:
-          url: https://deploy.example.com
+          url: https://pushbot.example.com
           env: |
             IMAGE_TAG=${{ github.sha }}
             DB_PASSWORD=${{ secrets.DB_PASSWORD }}
@@ -361,7 +361,7 @@ docker compose не интерполировал `$` внутри них.
 - README: те же шаги вручную, блок Caddy:
 
   ```
-  deploy.example.com {
+  pushbot.example.com {
       reverse_proxy 127.0.0.1:9800 {
           flush_interval -1
       }
