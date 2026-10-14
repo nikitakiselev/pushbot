@@ -7,23 +7,10 @@
 проверяются по OIDC-токенам GitHub Actions.
 
 ```mermaid
-sequenceDiagram
-    participant A as GitHub Actions
-    participant G as GitHub OIDC
-    participant C as Caddy (TLS)
-    participant P as pushbot
-    participant D as Docker
-
-    A->>A: сборка образа, push в ghcr.io
-    A->>G: запрос токена (audience = pushbot)
-    G-->>A: подписанный JWT
-    A->>C: POST /v1/deploy — токен, pushbot.yml, файлы, env
-    C->>P: проксирует
-    P->>G: публичные ключи (кешируются)
-    P->>P: проверка токена и allow
-    P->>P: файлы и .env в /srv/apps/имя
-    P->>D: шаги — docker compose pull, up -d
-    P-->>A: лог деплоя в реальном времени, последней строкой итог
+flowchart LR
+    A[git push] --> B[GitHub Actions]
+    B -->|HTTP| C[pushbot на сервере]
+    C --> D[обновлённое приложение]
 ```
 
 ## Установка на сервер
