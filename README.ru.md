@@ -15,6 +15,37 @@ flowchart LR
     C --> D["выполняет команды деплоя<br/>из pushbot.yml"]
 ```
 
+## С AI-агентом
+
+У pushbot есть [скилл для агентов](skills/pushbot/SKILL.md): Claude Code, Codex,
+Cursor, Gemini CLI и других. Он объясняет агенту, как подключить репозиторий,
+установить демон и разобрать упавший деплой, и предупреждает об ошибках, которые
+агенты обычно делают.
+
+Ничего устанавливать не нужно: вставьте агенту один из промптов.
+
+```text
+Подключи этот репозиторий к моему серверу pushbot. Инструкция: https://raw.githubusercontent.com/nikitakiselev/pushbot/v1/skills/pushbot/SKILL.md
+```
+
+```text
+Установи pushbot на этот сервер. Инструкция: https://raw.githubusercontent.com/nikitakiselev/pushbot/v1/skills/pushbot/SKILL.md
+```
+
+```text
+Деплой через pushbot упал, выясни почему. Инструкция: https://raw.githubusercontent.com/nikitakiselev/pushbot/v1/skills/pushbot/SKILL.md
+```
+
+Или установите скилл один раз, и агент будет использовать его каждый раз, когда речь
+зайдёт о pushbot:
+
+```sh
+npx skills add nikitakiselev/pushbot    # Codex, Cursor, Gemini CLI, Claude Code и другие
+```
+
+В Claude Code его можно поставить и как плагин:
+`/plugin install pushbot --marketplace nikitakiselev/pushbot`.
+
 ## Установка на сервер
 
 Нужны Linux с systemd и Docker.
@@ -139,6 +170,7 @@ systemd-юнит и перезапускает сервис (перезапус�
 **1. `pushbot.yml` в корне:**
 
 ```yaml
+# pushbot.yml
 files:
   - docker-compose.yml
 ```
@@ -191,6 +223,7 @@ jobs:
 ## `pushbot.yml`
 
 ```yaml
+# pushbot.yml
 name: my-service          # необязательно; по умолчанию — имя репозитория в нижнем регистре
 
 files:                    # что положить в /srv/apps/<name>
@@ -327,5 +360,10 @@ go test -race ./...
 `curl`, `tar`). CI дополнительно деплоит через action с настоящими OIDC-токенами
 GitHub. Релиз — тег `vX.Y.Z`: GoReleaser публикует бинарники, а тег `v1` переносится
 на свежий релиз.
+
+Скилл для агентов в `skills/pushbot/` во многом повторяет этот README: при изменении
+поведения правьте оба. Тесты в `internal/docs` разбирают каждый пример `pushbot.yml`
+(блок `yaml`, который начинается с `# pushbot.yml`) в README и в скилле и проверяют
+ссылки скилла.
 
 Дизайн: [`docs/superpowers/specs/2026-10-14-pushbot-design.md`](docs/superpowers/specs/2026-10-14-pushbot-design.md).

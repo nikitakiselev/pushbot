@@ -15,6 +15,36 @@ flowchart LR
     C --> D["runs the deploy commands<br/>from pushbot.yml"]
 ```
 
+## With an AI agent
+
+pushbot comes with an [agent skill](skills/pushbot/SKILL.md) for Claude Code, Codex,
+Cursor, Gemini CLI and other agents. It tells the agent how to connect a repository,
+install the daemon and debug a failed deploy, including the mistakes agents tend to
+make there.
+
+Nothing to install: paste one of these prompts into the agent.
+
+```text
+Connect this repository to my pushbot server. Instructions: https://raw.githubusercontent.com/nikitakiselev/pushbot/v1/skills/pushbot/SKILL.md
+```
+
+```text
+Install pushbot on this server. Instructions: https://raw.githubusercontent.com/nikitakiselev/pushbot/v1/skills/pushbot/SKILL.md
+```
+
+```text
+The pushbot deploy failed, find out why. Instructions: https://raw.githubusercontent.com/nikitakiselev/pushbot/v1/skills/pushbot/SKILL.md
+```
+
+Or install the skill once, and the agent uses it whenever pushbot comes up:
+
+```sh
+npx skills add nikitakiselev/pushbot    # Codex, Cursor, Gemini CLI, Claude Code and others
+```
+
+In Claude Code you can install it as a plugin instead:
+`/plugin install pushbot --marketplace nikitakiselev/pushbot`.
+
 ## Server installation
 
 Requires Linux with systemd and Docker.
@@ -140,6 +170,7 @@ Nothing to do on the server. In the project repository:
 **1. `pushbot.yml` in the root:**
 
 ```yaml
+# pushbot.yml
 files:
   - docker-compose.yml
 ```
@@ -191,6 +222,7 @@ List the variables your compose file needs; if it needs none, drop `env`.
 ## `pushbot.yml`
 
 ```yaml
+# pushbot.yml
 name: my-service          # optional; defaults to the lower-cased repository name
 
 files:                    # what to put into /srv/apps/<name>
@@ -327,5 +359,10 @@ The tests in `internal/e2e` run the real `action.sh` (requires `bash`, `yq`, `jq
 `curl`, `tar`). CI also deploys through the action with real GitHub OIDC tokens. To
 release, push a `vX.Y.Z` tag: GoReleaser publishes the binaries and the `v1` tag is
 moved to the new release.
+
+The agent skill in `skills/pushbot/` repeats much of this README for agents: change
+both when behaviour changes. The tests in `internal/docs` parse every `pushbot.yml`
+example (a `yaml` block starting with `# pushbot.yml`) in the READMEs and the skill,
+and check the skill's links.
 
 Design (in Russian): [`docs/superpowers/specs/2026-10-14-pushbot-design.md`](docs/superpowers/specs/2026-10-14-pushbot-design.md).
