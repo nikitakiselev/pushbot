@@ -1,0 +1,28 @@
+version: 2
+
+builds:
+  - main: ./cmd/pushbot
+    env: [CGO_ENABLED=0]
+    goos: [linux]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags: ["-s -w -X main.version={{ .Version }}"]
+
+archives:
+  - formats: [tar.gz]
+    # Stable names, so install.sh can use releases/latest/download/...
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - src: packaging/pushbot.service
+        strip_parent: true
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  use: github
+
+release:
+  github:
+    owner: nikitakiselev
+    name: pushbot

@@ -1,0 +1,23 @@
+[Unit]
+Description=pushbot deploy daemon
+Documentation=https://github.com/nikitakiselev/pushbot
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+User=pushbot
+Group=pushbot
+SupplementaryGroups=docker
+Environment=HOME=/var/lib/pushbot
+ExecStart=/usr/local/bin/pushbot serve -config /etc/pushbot/config.yml
+Restart=on-failure
+RestartSec=5
+# SIGTERM goes to pushbot only; it stops accepting deploys and waits for running
+# ones (up to deploy_timeout) before exiting. Everything left is killed after that.
+KillMode=mixed
+TimeoutStopSec=16min
+NoNewPrivileges=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target

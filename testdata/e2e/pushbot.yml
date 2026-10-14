@@ -1,0 +1,7 @@
+# Used by the e2e job in .github/workflows/ci.yml.
+name: pushbot-e2e
+files:
+  - testdata/e2e/greeting.txt: greeting.txt
+steps:
+  - run: echo "$GREETING from $PUSHBOT_SHA" > hello.txt
+  - run: cat greeting.txt hello.txt

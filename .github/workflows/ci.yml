@@ -1,0 +1,76 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - run: go vet ./...
+      - run: go test -race ./...
+
+  # Deploys through the real action with real GitHub OIDC tokens.
+  # Tokens are not issued to pull requests from forks.
+  e2e:
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Start pushbot
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          go build -o "$RUNNER_TEMP/pushbot" ./cmd/pushbot
+          mkdir -p "$RUNNER_TEMP/pb"
+          cat > "$RUNNER_TEMP/pb/config.yml" <<CONFIG
+          listen: 127.0.0.1:9800
+          projects_root: $RUNNER_TEMP/pb/apps
+          state_dir: $RUNNER_TEMP/pb/state
+          allow:
+            - ${{ github.repository }}
+          CONFIG
+          "$RUNNER_TEMP/pushbot" serve -config "$RUNNER_TEMP/pb/config.yml" >"$RUNNER_TEMP/pb/daemon.log" 2>&1 &
+          for i in $(seq 1 60); do
+            curl -sf http://127.0.0.1:9800/healthz && exit 0
+            sleep 1
+          done
+          cat "$RUNNER_TEMP/pb/daemon.log"
+          exit 1
+
+      - name: Deploy with the action
+        uses: ./
+        with:
+          url: http://127.0.0.1:9800
+          config: testdata/e2e/pushbot.yml
+          registry-auth: "false"
+          env: |
+            GREETING=hello
+
+      - name: Check the deployed project
+        run: |
+          dir="$RUNNER_TEMP/pb/apps/pushbot-e2e"
+          test "$(cat "$dir/greeting.txt")" = "files ok"
+          test "$(cat "$dir/hello.txt")" = "hello from $GITHUB_SHA"
+          grep -qx "GREETING='hello'" "$dir/.env"
+
+      - name: Daemon log
+        if: always()
+        run: cat "$RUNNER_TEMP/pb/daemon.log"
