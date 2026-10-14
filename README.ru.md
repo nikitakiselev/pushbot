@@ -94,11 +94,13 @@ server {
 укажите в `/etc/pushbot/config.yml` `listen: 172.17.0.1:9800` (адрес хоста в сети
 `docker0`, проверьте `ip addr show docker0`) и проксируйте на него.
 
-Проверка: `curl https://pushbot.example.com/healthz` должен вернуть `ok`.
+Проверка: `curl https://pushbot.example.com/healthz` должен вернуть `ok`. Или проверить
+всё сразу: `sudo pushbot doctor --url https://pushbot.example.com`.
 
 ## Управление сервисом
 
 ```sh
+sudo pushbot doctor                     # самопроверка, к каждой проблеме — как исправить
 sudo systemctl status pushbot           # запущен ли; последние строки лога
 sudo systemctl restart pushbot          # после правки /etc/pushbot/config.yml
 sudo systemctl stop pushbot             # ждёт завершения текущих деплоев (до 16 минут)

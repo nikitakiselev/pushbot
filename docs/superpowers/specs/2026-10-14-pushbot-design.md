@@ -382,6 +382,7 @@ internal/deploy/      # оркестрация конвейера
 internal/server/      # HTTP-обработчики, потоковая отдача
 internal/metrics/     # метрики Prometheus
 internal/upgrade/     # pushbot upgrade
+internal/doctor/      # pushbot doctor
 action.yml
 install.sh
 packaging/pushbot.service
@@ -440,7 +441,23 @@ Docker в тестах не нужен: шаги — обычный shell (`echo
 `daemon-reload`), затем `systemctl restart pushbot`, если сервис запущен; иначе
 подсказывает запустить. Конфиг не трогает. Только Linux, только root.
 
-## 17. Принятые решения
+## 17. `pushbot doctor` (добавлено после v1.2.0)
+
+`sudo pushbot doctor [--config path] [--url https://…]` — самопроверка сервера. Строка на
+проверку: ✓ / ! (предупреждение) / ✗ (ошибка) и подсказка, как исправить. Код выхода 1,
+если есть хоть одна ✗.
+
+Проверки: конфиг читается и валиден; `pushbot.service` установлен, включён и запущен;
+если запущен — `/healthz` на `listen`, `/metrics` на `metrics_listen`, `/healthz` по
+`--url` через прокси; `docker version` и `docker compose version` от пользователя
+`pushbot` с группой `docker`, как у юнита; `projects_root` и `state_dir` существуют и
+доступны пользователю `pushbot` на запись; ключи OIDC (`<issuer>/.well-known/jwks`)
+доступны; владельцы из `allow` находятся через API GitHub, и их ID совпадают с
+`owners.json` (иначе логин сменил владельца — ✗); часы: смещение по заголовку `Date`
+ответа с ключами, ≥10 с — !, ≥60 с — ✗ (запас проверки токенов); версия: если вышла
+новее — ! с `sudo pushbot upgrade`. Только Linux, только root.
+
+## 18. Принятые решения
 
 | Вопрос | Решение | Почему |
 |---|---|---|

@@ -54,7 +54,7 @@ func Run(ctx context.Context, o Options) error {
 
 	tag := o.Version
 	if tag == "" {
-		latest, err := latestTag(ctx, o)
+		latest, err := LatestTag(ctx, o.Client, o.APIBase, o.Repo, o.Token)
 		if err != nil {
 			return fmt.Errorf("find the latest release: %w", err)
 		}
@@ -115,16 +115,17 @@ func Run(ctx context.Context, o Options) error {
 	return nil
 }
 
-func latestTag(ctx context.Context, o Options) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, o.APIBase+"/repos/"+o.Repo+"/releases/latest", nil)
+// LatestTag returns the tag of the latest release of repo, e.g. "v1.2.0".
+func LatestTag(ctx context.Context, client *http.Client, apiBase, repo, token string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiBase+"/repos/"+repo+"/releases/latest", nil)
 	if err != nil {
 		return "", err
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
-	if o.Token != "" {
-		req.Header.Set("Authorization", "Bearer "+o.Token)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
-	resp, err := o.Client.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
 	}

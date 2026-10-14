@@ -31,7 +31,8 @@ var (
 	ErrForbidden = errors.New("forbidden")
 )
 
-const stepPath = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+// StepPath is the PATH of deploy steps.
+const StepPath = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 // Config of the deployer.
 type Config struct {
@@ -326,7 +327,7 @@ func (d *Deployer) lock(ctx context.Context, name string, onWait func()) (func()
 // input cannot override them.
 func (j *Job) stepEnv() ([]string, error) {
 	c := j.req.Claims
-	env := []string{"PATH=" + stepPath, "HOME=" + j.d.cfg.StateDir}
+	env := []string{"PATH=" + StepPath, "HOME=" + j.d.cfg.StateDir}
 	for _, v := range j.req.Env {
 		env = append(env, v.Key+"="+v.Value)
 	}
