@@ -95,11 +95,13 @@ the container, not the server. Either run the proxy with `network_mode: host`, o
 `listen: 172.17.0.1:9800` in `/etc/pushbot/config.yml` (the host address on the
 `docker0` network, check with `ip addr show docker0`) and proxy to that.
 
-Check: `curl https://pushbot.example.com/healthz` should return `ok`.
+Check: `curl https://pushbot.example.com/healthz` should return `ok`. Or check everything
+at once: `sudo pushbot doctor --url https://pushbot.example.com`.
 
 ## Managing the service
 
 ```sh
+sudo pushbot doctor                     # self-check, with a fix for every problem
 sudo systemctl status pushbot           # is it running? shows the last log lines
 sudo systemctl restart pushbot          # after editing /etc/pushbot/config.yml
 sudo systemctl stop pushbot             # waits for running deploys (up to 16 min)

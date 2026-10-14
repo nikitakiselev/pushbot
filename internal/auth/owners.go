@@ -13,8 +13,8 @@ import (
 	"github.com/nikitakiselev/pushbot/internal/state"
 )
 
-// errOwnerNotFound is permanent: retrying or falling back to the cache won't help.
-var errOwnerNotFound = errors.New("no such GitHub user or organization")
+// ErrOwnerNotFound is permanent: retrying or falling back to the cache won't help.
+var ErrOwnerNotFound = errors.New("no such GitHub user or organization")
 
 // OwnerResolver looks up numeric account IDs via the GitHub REST API.
 type OwnerResolver struct {
@@ -47,7 +47,7 @@ func (r *OwnerResolver) Resolve(ctx context.Context, owner string) (string, erro
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusNotFound {
-		return "", fmt.Errorf("%s: %w", owner, errOwnerNotFound)
+		return "", fmt.Errorf("%s: %w", owner, ErrOwnerNotFound)
 	}
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("%s: GitHub API returned %s", owner, resp.Status)
@@ -76,7 +76,7 @@ func OwnerIDs(ctx context.Context, r *OwnerResolver, owners []string, cacheFile 
 			}
 			return ids, nil
 		}
-		if errors.Is(err, errOwnerNotFound) {
+		if errors.Is(err, ErrOwnerNotFound) {
 			return nil, err
 		}
 		if time.Now().Add(delay).After(deadline) {
