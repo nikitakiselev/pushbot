@@ -1,0 +1,40 @@
+name: pushbot deploy
+description: Deploy the current commit to a server running the pushbot daemon.
+branding:
+  icon: upload-cloud
+  color: blue
+
+inputs:
+  url:
+    description: Base URL of the pushbot daemon, e.g. https://deploy.example.com
+    required: true
+  env:
+    description: KEY=VALUE lines written to .env in the project directory.
+    required: false
+    default: ""
+  config:
+    description: Path to pushbot.yml, relative to the repository root.
+    required: false
+    default: pushbot.yml
+  registry-auth:
+    description: Send the job's GITHUB_TOKEN so the server can pull private images from ghcr.io.
+    required: false
+    default: "true"
+  audience:
+    description: Audience of the OIDC token; must match the daemon's audience setting.
+    required: false
+    default: pushbot
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: '"$GITHUB_ACTION_PATH/action.sh"'
+      env:
+        PUSHBOT_URL: ${{ inputs.url }}
+        PUSHBOT_ENV: ${{ inputs.env }}
+        PUSHBOT_CONFIG: ${{ inputs.config }}
+        PUSHBOT_REGISTRY_AUTH: ${{ inputs.registry-auth }}
+        PUSHBOT_AUDIENCE: ${{ inputs.audience }}
+        PUSHBOT_REGISTRY_USER: ${{ github.actor }}
+        PUSHBOT_REGISTRY_TOKEN: ${{ github.token }}
