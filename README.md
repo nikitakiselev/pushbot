@@ -97,6 +97,29 @@ the container, not the server. Either run the proxy with `network_mode: host`, o
 
 Check: `curl https://deploy.example.com/healthz` should return `ok`.
 
+## Managing the service
+
+```sh
+sudo systemctl status pushbot           # is it running? shows the last log lines
+sudo systemctl restart pushbot          # after editing /etc/pushbot/config.yml
+sudo systemctl stop pushbot             # waits for running deploys (up to 16 min)
+sudo systemctl start pushbot
+sudo journalctl -u pushbot -f           # follow the daemon log
+sudo journalctl -u pushbot --since today   # deploy summaries, rejected requests
+curl -s http://127.0.0.1:9800/healthz   # prints "ok" when the daemon is up
+pushbot version
+```
+
+Deploy logs, one file per deploy, newest first:
+
+```sh
+sudo ls -t /var/lib/pushbot/logs/my-service/
+sudo sh -c 'cat "$(ls -t /var/lib/pushbot/logs/my-service/*.log | head -n1)"'
+```
+
+Upgrade: run the install command again (the config is kept). To install a specific
+version, e.g. to roll back, add `PUSHBOT_VERSION=v1.0.0` next to `PUSHBOT_ALLOW`.
+
 ## Adding a project
 
 Nothing to do on the server. In the project repository:
