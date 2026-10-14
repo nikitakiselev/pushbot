@@ -25,7 +25,7 @@ tokens and runs the deploy steps from the project's pushbot.yml.
 
 Docs: https://github.com/` + repo,
 	}
-	root.AddCommand(serveCmd(), versionCmd())
+	root.AddCommand(serveCmd(), upgradeCmd(), versionCmd())
 	root.SetArgs(compatArgs(os.Args[1:]))
 	if err := fang.Execute(context.Background(), root, fang.WithVersion(version)); err != nil {
 		os.Exit(1)
