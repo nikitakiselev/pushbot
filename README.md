@@ -52,15 +52,60 @@ GitHub подписывает токены для всех.
 `/var/lib/pushbot`, конфиг `/etc/pushbot/config.yml` и systemd-сервис. Повторный
 запуск обновляет pushbot и не трогает конфиг.
 
-Демон слушает `127.0.0.1:9800`. Наружу его отдаёт Caddy:
+### Reverse proxy
+
+Демон слушает `127.0.0.1:9800` по обычному HTTP. Наружу его отдаёт reverse proxy с
+TLS: в запросе передаются секреты из `env`, так что голый HTTP наружу недопустим.
+От прокси нужно три вещи: пропускать тело запроса до ~50 МБ (архив с файлами),
+не буферизовать ответ (иначе лог деплоя придёт в Actions только в конце) и не
+обрывать соединение, пока идёт деплой (до 15 минут).
+
+**Caddy** (`Caddyfile`). Сертификат Caddy получит сам, размер тела и время ответа
+по умолчанию не ограничены:
 
 ```
 deploy.example.com {
     reverse_proxy 127.0.0.1:9800 {
-        flush_interval -1
+        flush_interval -1    # отдавать лог сразу, без буфера
     }
 }
 ```
+
+**nginx** (`/etc/nginx/sites-available/pushbot`, сертификат — например, от certbot):
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name deploy.example.com;
+
+    ssl_certificate     /etc/letsencrypt/live/deploy.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/deploy.example.com/privkey.pem;
+
+    location / {
+        proxy_pass http://127.0.0.1:9800;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+
+        client_max_body_size 64m;   # по умолчанию 1m; архив до 50 МБ (max_bundle_size)
+        proxy_buffering off;        # отдавать лог сразу, без буфера
+        proxy_read_timeout 20m;     # больше deploy_timeout (15m)
+    }
+}
+
+server {
+    listen 80;
+    server_name deploy.example.com;
+    return 301 https://$host$request_uri;
+}
+```
+
+Если прокси сам работает в Docker-контейнере, `127.0.0.1` внутри контейнера — это
+сам контейнер, а не сервер. Тогда либо запустите прокси с `network_mode: host`, либо
+укажите в `/etc/pushbot/config.yml` `listen: 172.17.0.1:9800` (адрес хоста в сети
+`docker0`, проверьте `ip addr show docker0`) и проксируйте на него.
+
+Проверка: `curl https://deploy.example.com/healthz` должен вернуть `ok`.
 
 ## Подключение проекта
 
