@@ -12,7 +12,9 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -207,6 +209,31 @@ func TestDrain(t *testing.T) {
 	resp := ts.post(t, ts.issuer.Token(t, nil), field{"manifest", ""})
 	if resp.StatusCode != http.StatusServiceUnavailable {
 		t.Errorf("status = %d, want 503", resp.StatusCode)
+	}
+}
+
+type rejections struct {
+	mu    sync.Mutex
+	codes []int
+}
+
+func (r *rejections) RequestRejected(code int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.codes = append(r.codes, code)
+}
+
+func TestRejectionObserver(t *testing.T) {
+	ts := newTestServer(t, 1<<20)
+	obs := &rejections{}
+	ts.srv.WithObserver(obs)
+	readAll(t, ts.post(t, "", field{"manifest", ""}).Body)
+	readAll(t, ts.post(t, ts.issuer.Token(t, nil), field{"manifest", "nmae: x"}).Body)
+	readAll(t, ts.post(t, ts.issuer.Token(t, nil), field{"manifest", "steps:\n  - run: 'true'"}).Body)
+	obs.mu.Lock()
+	defer obs.mu.Unlock()
+	if !reflect.DeepEqual(obs.codes, []int{401, 400}) {
+		t.Errorf("rejections = %v, want [401 400]", obs.codes)
 	}
 }
 

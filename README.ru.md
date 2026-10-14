@@ -201,6 +201,7 @@ allow:
 # max_bundle_size: 50MB
 # max_unpacked_size: 200MB
 # log_retention: 20
+# metrics_listen: 127.0.0.1:9801   # Prometheus /metrics, по умолчанию выключено
 ```
 
 При старте pushbot узнаёт у GitHub числовые ID владельцев из `allow` и сверяет
@@ -228,6 +229,47 @@ allow:
 
 Если job в Actions отменили, деплой всё равно доводится до конца — смотрите лог на
 сервере.
+
+## Метрики
+
+Задайте `metrics_listen`, и pushbot будет отдавать метрики Prometheus по `/metrics`.
+Они висят на отдельном адресе, а не на порту деплоя, поэтому не утекают наружу через
+reverse proxy. Если Prometheus стоит на другой машине, укажите LAN-адрес сервера.
+
+```yaml
+# /etc/pushbot/config.yml
+metrics_listen: 127.0.0.1:9801
+```
+
+```yaml
+# prometheus.yml
+scrape_configs:
+  - job_name: pushbot
+    static_configs:
+      - targets: ["127.0.0.1:9801"]
+```
+
+| Метрика | Тип | |
+|---|---|---|
+| `pushbot_deploys_total{project, result}` | counter | завершённые деплои; `result` — `success`, `failed` или `timeout` |
+| `pushbot_deploy_duration_seconds{project}` | histogram | длительность деплоя |
+| `pushbot_deploy_in_progress{project}` | gauge | деплои, идущие прямо сейчас |
+| `pushbot_last_deploy_success{project}` | gauge | 1, если последний деплой успешен, 0 — если упал |
+| `pushbot_last_deploy_timestamp_seconds{project}` | gauge | когда закончился последний деплой |
+| `pushbot_requests_rejected_total{code}` | counter | отказы 400/401/403/413/503; всплеск 401/403 — кто-то пробует чужие токены |
+| `pushbot_build_info{version}` | gauge | версия pushbot |
+
+Плюс стандартные метрики `go_*` и `process_*`. Пример алерта:
+
+```yaml
+groups:
+  - name: pushbot
+    rules:
+      - alert: PushbotDeployFailed
+        expr: pushbot_last_deploy_success == 0
+        annotations:
+          summary: "Последний деплой {{ $labels.project }} упал"
+```
 
 ## Разработка
 

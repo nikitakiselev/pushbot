@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path"
 	"path/filepath"
@@ -18,6 +19,7 @@ import (
 // Config is the validated daemon configuration.
 type Config struct {
 	Listen          string
+	MetricsListen   string // "" disables /metrics
 	ProjectsRoot    string
 	StateDir        string
 	Audience        string
@@ -38,6 +40,7 @@ type AllowRule struct {
 
 type rawConfig struct {
 	Listen          string   `yaml:"listen"`
+	MetricsListen   string   `yaml:"metrics_listen"`
 	ProjectsRoot    string   `yaml:"projects_root"`
 	StateDir        string   `yaml:"state_dir"`
 	Audience        string   `yaml:"audience"`
@@ -72,15 +75,21 @@ func Parse(data []byte) (*Config, error) {
 	}
 
 	c := &Config{
-		Listen:       or(raw.Listen, "127.0.0.1:9800"),
-		ProjectsRoot: raw.ProjectsRoot,
-		StateDir:     or(raw.StateDir, "/var/lib/pushbot"),
-		Audience:     or(raw.Audience, "pushbot"),
-		OIDCIssuer:   or(raw.OIDCIssuer, "https://token.actions.githubusercontent.com"),
-		LogRetention: 20,
+		Listen:        or(raw.Listen, "127.0.0.1:9800"),
+		MetricsListen: raw.MetricsListen,
+		ProjectsRoot:  raw.ProjectsRoot,
+		StateDir:      or(raw.StateDir, "/var/lib/pushbot"),
+		Audience:      or(raw.Audience, "pushbot"),
+		OIDCIssuer:    or(raw.OIDCIssuer, "https://token.actions.githubusercontent.com"),
+		LogRetention:  20,
 	}
 	if c.ProjectsRoot == "" || !filepath.IsAbs(c.ProjectsRoot) {
 		return nil, errors.New("projects_root must be an absolute path")
+	}
+	if c.MetricsListen != "" {
+		if _, port, err := net.SplitHostPort(c.MetricsListen); err != nil || port == "" {
+			return nil, fmt.Errorf("metrics_listen: expected host:port, got %q", c.MetricsListen)
+		}
 	}
 	if !filepath.IsAbs(c.StateDir) {
 		return nil, errors.New("state_dir must be an absolute path")

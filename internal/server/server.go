@@ -31,6 +31,11 @@ type TokenVerifier interface {
 	Verify(ctx context.Context, rawToken string) (*auth.Claims, error)
 }
 
+// RejectionObserver is notified about requests rejected before the deploy starts.
+type RejectionObserver interface {
+	RequestRejected(code int)
+}
+
 // Server handles POST /v1/deploy and GET /healthz.
 type Server struct {
 	verifier  TokenVerifier
@@ -38,6 +43,7 @@ type Server struct {
 	maxBundle int64
 	tmpDir    string // where uploaded bundles are spooled
 	logger    *slog.Logger
+	observer  RejectionObserver
 	draining  atomic.Bool
 }
 
@@ -46,6 +52,12 @@ func New(v TokenVerifier, d *deploy.Deployer, maxBundle int64, tmpDir string, lo
 		logger = slog.Default()
 	}
 	return &Server{verifier: v, deployer: d, maxBundle: maxBundle, tmpDir: tmpDir, logger: logger}
+}
+
+// WithObserver sets an observer for rejected requests (e.g. Prometheus metrics).
+func (s *Server) WithObserver(o RejectionObserver) *Server {
+	s.observer = o
+	return s
 }
 
 // Drain makes new deploy requests fail with 503; running deploys continue.
@@ -82,6 +94,9 @@ func (s *Server) handleDeploy(w http.ResponseWriter, r *http.Request) {
 			attrs = append(attrs, "repository", claims.Repository)
 		}
 		s.logger.Warn("deploy request rejected", attrs...)
+		if s.observer != nil {
+			s.observer.RequestRejected(herr.code)
+		}
 		http.Error(w, "pushbot: "+herr.msg, herr.code)
 		return
 	}

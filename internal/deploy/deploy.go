@@ -43,6 +43,14 @@ type Config struct {
 	LogRetention int
 	Runner       runner.Options
 	Logger       *slog.Logger // one line per deploy; default slog.Default()
+	Observer     Observer     // optional, e.g. Prometheus metrics
+}
+
+// Observer is notified when deploys start and finish.
+type Observer interface {
+	DeployStarted(project string)
+	// DeployFinished gets result "success", "failed" or "timeout".
+	DeployFinished(project, result string, duration time.Duration)
 }
 
 // Registry credentials for pulling private images from GHCR.
@@ -67,6 +75,20 @@ type Result struct {
 	Duration time.Duration
 }
 
+const reasonTimeout = "timeout"
+
+// Label is "success", "failed" or "timeout".
+func (r Result) Label() string {
+	switch {
+	case r.Success:
+		return "success"
+	case r.Reason == reasonTimeout:
+		return "timeout"
+	default:
+		return "failed"
+	}
+}
+
 // Deployer prepares and runs deploys. Deploys of one project are serialized.
 type Deployer struct {
 	cfg      Config
@@ -83,6 +105,9 @@ func New(cfg Config) (*Deployer, error) {
 	}
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
+	}
+	if cfg.Observer == nil {
+		cfg.Observer = noObserver{}
 	}
 	for _, dir := range []string{cfg.ProjectsRoot, filepath.Join(cfg.StateDir, "tmp"), filepath.Join(cfg.StateDir, "logs")} {
 		if err := os.MkdirAll(dir, 0o750); err != nil {
@@ -183,6 +208,7 @@ func (j *Job) Cleanup() {
 func (j *Job) Run(w io.Writer) Result {
 	defer j.Cleanup()
 	start := time.Now()
+	j.d.cfg.Observer.DeployStarted(j.name)
 	ctx, cancel := context.WithTimeout(context.Background(), j.d.cfg.Timeout)
 	defer cancel()
 
@@ -207,6 +233,7 @@ func (j *Job) Run(w io.Writer) Result {
 		out.linef("PUSHBOT: failed: %s", res.Reason)
 	}
 	out.close()
+	j.d.cfg.Observer.DeployFinished(j.name, res.Label(), res.Duration)
 
 	result := "success"
 	if !res.Success {
@@ -232,7 +259,7 @@ func (j *Job) run(ctx context.Context, out *output, sha7 string) Result {
 
 	unlock, err := j.d.lock(ctx, j.name, func() { out.line("==> waiting for previous deploy...") })
 	if err != nil {
-		return Result{Reason: "timeout"}
+		return Result{Reason: reasonTimeout}
 	}
 	defer unlock()
 
@@ -264,7 +291,7 @@ func (j *Job) run(ctx context.Context, out *output, sha7 string) Result {
 		case err != nil:
 			return Result{Reason: fmt.Sprintf("step %d/%d: %v", i+1, len(steps), err)}
 		case res.TimedOut:
-			return Result{Reason: "timeout"}
+			return Result{Reason: reasonTimeout}
 		case res.ExitCode != 0:
 			return Result{Reason: fmt.Sprintf("step %d/%d exited with code %d", i+1, len(steps), res.ExitCode)}
 		}
@@ -362,6 +389,11 @@ func (j *Job) envSummary() string {
 	}
 	return strings.Join(keys, ", ")
 }
+
+type noObserver struct{}
+
+func (noObserver) DeployStarted(string)                         {}
+func (noObserver) DeployFinished(string, string, time.Duration) {}
 
 // summary is the first line of a script, marked if more lines follow.
 func summary(script string) string {
