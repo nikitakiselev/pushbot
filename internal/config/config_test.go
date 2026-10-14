@@ -35,6 +35,7 @@ allow:
 func TestParseOverrides(t *testing.T) {
 	c, err := Parse([]byte(`
 listen: 0.0.0.0:7000
+metrics_listen: 192.168.1.10:9801
 projects_root: /opt
 state_dir: /tmp/state
 audience: deploy
@@ -49,6 +50,9 @@ allow:
 `))
 	if err != nil {
 		t.Fatal(err)
+	}
+	if c.MetricsListen != "192.168.1.10:9801" {
+		t.Errorf("metrics_listen = %q", c.MetricsListen)
 	}
 	if c.Listen != "0.0.0.0:7000" || c.ProjectsRoot != "/opt" || c.StateDir != "/tmp/state" ||
 		c.Audience != "deploy" || c.DeployTimeout != 90*time.Second || c.MaxBundleSize != 1024 ||
@@ -74,6 +78,7 @@ func TestParseErrors(t *testing.T) {
 		"bad size":           "projects_root: /srv\nallow: [a/*]\nmax_bundle_size: 10XB",
 		"zero retention":     "projects_root: /srv\nallow: [a/*]\nlog_retention: 0",
 		"relative state dir": "projects_root: /srv\nallow: [a/*]\nstate_dir: state",
+		"bad metrics_listen": "projects_root: /srv\nallow: [a/*]\nmetrics_listen: 9801",
 	}
 	for name, doc := range cases {
 		t.Run(name, func(t *testing.T) {

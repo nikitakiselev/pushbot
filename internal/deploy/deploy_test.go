@@ -345,3 +345,39 @@ func TestDeployLogRetention(t *testing.T) {
 		t.Errorf("log files = %d, want 2", len(logs))
 	}
 }
+
+type recordingObserver struct {
+	mu     sync.Mutex
+	events []string
+}
+
+func (r *recordingObserver) DeployStarted(project string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.events = append(r.events, "start "+project)
+}
+
+func (r *recordingObserver) DeployFinished(project, result string, d time.Duration) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if d <= 0 {
+		result += " (no duration)"
+	}
+	r.events = append(r.events, "finish "+project+" "+result)
+}
+
+func TestDeployObserver(t *testing.T) {
+	obs := &recordingObserver{}
+	e := newEnv(t, func(c *Config) { c.Observer = obs; c.Timeout = 300 * time.Millisecond })
+	for _, script := range []string{"'true'", "exit 1", "sleep 10"} {
+		run(t, e, Request{Claims: claims("me/app", "1"), Manifest: parse(t, "steps:\n  - run: "+script)})
+	}
+	want := []string{
+		"start app", "finish app success",
+		"start app", "finish app failed",
+		"start app", "finish app timeout",
+	}
+	if strings.Join(obs.events, "\n") != strings.Join(want, "\n") {
+		t.Errorf("events = %q, want %q", obs.events, want)
+	}
+}

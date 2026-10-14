@@ -17,6 +17,7 @@ import (
 	"github.com/nikitakiselev/pushbot/internal/auth"
 	"github.com/nikitakiselev/pushbot/internal/config"
 	"github.com/nikitakiselev/pushbot/internal/deploy"
+	"github.com/nikitakiselev/pushbot/internal/metrics"
 	"github.com/nikitakiselev/pushbot/internal/server"
 )
 
@@ -72,6 +73,7 @@ func serve(args []string) error {
 	if err != nil {
 		return err
 	}
+	m := metrics.New(version)
 	d, err := deploy.New(deploy.Config{
 		ProjectsRoot: cfg.ProjectsRoot,
 		StateDir:     cfg.StateDir,
@@ -79,12 +81,13 @@ func serve(args []string) error {
 		MaxUnpacked:  cfg.MaxUnpackedSize,
 		LogRetention: cfg.LogRetention,
 		Logger:       logger,
+		Observer:     m,
 	})
 	if err != nil {
 		return err
 	}
 	verifier := auth.NewVerifier(cfg.OIDCIssuer, cfg.Audience, rules)
-	s := server.New(verifier, d, cfg.MaxBundleSize, filepath.Join(cfg.StateDir, "tmp"), logger)
+	s := server.New(verifier, d, cfg.MaxBundleSize, filepath.Join(cfg.StateDir, "tmp"), logger).WithObserver(m)
 
 	// No read/write timeouts: deploys stream for up to deploy_timeout.
 	httpSrv := &http.Server{
@@ -93,9 +96,19 @@ func serve(args []string) error {
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       2 * time.Minute,
 	}
-	errCh := make(chan error, 1)
+	errCh := make(chan error, 2)
 	go func() { errCh <- httpSrv.ListenAndServe() }()
-	logger.Info("pushbot started", "version", version, "listen", cfg.Listen, "projects_root", cfg.ProjectsRoot)
+
+	// Metrics get their own listener so they are not exposed through the deploy proxy.
+	var metricsSrv *http.Server
+	if cfg.MetricsListen != "" {
+		mux := http.NewServeMux()
+		mux.Handle("GET /metrics", m.Handler())
+		metricsSrv = &http.Server{Addr: cfg.MetricsListen, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+		go func() { errCh <- metricsSrv.ListenAndServe() }()
+	}
+	logger.Info("pushbot started", "version", version, "listen", cfg.Listen,
+		"metrics_listen", cfg.MetricsListen, "projects_root", cfg.ProjectsRoot)
 
 	select {
 	case err := <-errCh:
@@ -110,8 +123,15 @@ func serve(args []string) error {
 	if err := httpSrv.Shutdown(shutdownCtx); err != nil {
 		return fmt.Errorf("shutdown: %w", err)
 	}
-	if err := <-errCh; !errors.Is(err, http.ErrServerClosed) {
-		return err
+	running := 1
+	if metricsSrv != nil {
+		_ = metricsSrv.Close()
+		running++
+	}
+	for range running {
+		if err := <-errCh; !errors.Is(err, http.ErrServerClosed) {
+			return err
+		}
 	}
 	logger.Info("pushbot stopped")
 	return nil

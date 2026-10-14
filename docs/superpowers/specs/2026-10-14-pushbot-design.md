@@ -412,7 +412,20 @@ Docker в тестах не нужен: шаги — обычный shell (`echo
   `url: http://127.0.0.1:9800` и тестовым манифестом, проверить результат.
   Проверяет весь путь с настоящими токенами GitHub.
 
-## 15. Принятые решения
+## 15. Метрики (добавлено после v1.0.0)
+
+Ключ `metrics_listen` (по умолчанию пусто — выключено) поднимает отдельный HTTP-сервер
+с `GET /metrics` в формате Prometheus (`prometheus/client_golang`). Отдельный адрес —
+чтобы метрики не публиковались через reverse proxy вместе с API деплоя.
+
+Метрики: `pushbot_deploys_total{project,result}` (`success`/`failed`/`timeout`),
+`pushbot_deploy_duration_seconds{project}`, `pushbot_deploy_in_progress{project}`,
+`pushbot_last_deploy_success{project}`, `pushbot_last_deploy_timestamp_seconds{project}`,
+`pushbot_requests_rejected_total{code}`, `pushbot_build_info{version}`, плюс `go_*` и
+`process_*`. Сервер метрик останавливается после основного, чтобы метрики были
+доступны, пока демон ждёт завершения деплоев.
+
+## 16. Принятые решения
 
 | Вопрос | Решение | Почему |
 |---|---|---|

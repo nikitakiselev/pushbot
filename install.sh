@@ -56,6 +56,8 @@ listen: 127.0.0.1:9800
 projects_root: /srv/apps
 allow:
   - $allow
+# Prometheus metrics at /metrics on a separate address (disabled by default):
+# metrics_listen: 127.0.0.1:9801
 EOF
   echo "Created /etc/pushbot/config.yml"
 fi

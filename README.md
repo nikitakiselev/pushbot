@@ -201,6 +201,7 @@ allow:
 # max_bundle_size: 50MB
 # max_unpacked_size: 200MB
 # log_retention: 20
+# metrics_listen: 127.0.0.1:9801   # Prometheus /metrics, disabled by default
 ```
 
 On startup pushbot looks up the numeric GitHub IDs of the owners in `allow` and
@@ -229,6 +230,47 @@ limit).
 
 If the Actions job is cancelled, the deploy still runs to completion — check the log
 on the server.
+
+## Metrics
+
+Set `metrics_listen` to expose Prometheus metrics at `/metrics`. They are served on
+a separate address, not on the deploy port, so they don't leak through the reverse
+proxy. If Prometheus runs on another machine, use the server's LAN address.
+
+```yaml
+# /etc/pushbot/config.yml
+metrics_listen: 127.0.0.1:9801
+```
+
+```yaml
+# prometheus.yml
+scrape_configs:
+  - job_name: pushbot
+    static_configs:
+      - targets: ["127.0.0.1:9801"]
+```
+
+| Metric | Type | |
+|---|---|---|
+| `pushbot_deploys_total{project, result}` | counter | finished deploys; `result` is `success`, `failed` or `timeout` |
+| `pushbot_deploy_duration_seconds{project}` | histogram | deploy duration |
+| `pushbot_deploy_in_progress{project}` | gauge | deploys running right now |
+| `pushbot_last_deploy_success{project}` | gauge | 1 if the last deploy succeeded, 0 if it failed |
+| `pushbot_last_deploy_timestamp_seconds{project}` | gauge | when the last deploy finished |
+| `pushbot_requests_rejected_total{code}` | counter | requests rejected with 400/401/403/413/503; a spike of 401/403 means someone is trying foreign tokens |
+| `pushbot_build_info{version}` | gauge | pushbot version |
+
+Plus the standard `go_*` and `process_*` metrics. Example alert:
+
+```yaml
+groups:
+  - name: pushbot
+    rules:
+      - alert: PushbotDeployFailed
+        expr: pushbot_last_deploy_success == 0
+        annotations:
+          summary: "Last deploy of {{ $labels.project }} failed"
+```
 
 ## Development
 
