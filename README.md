@@ -1,5 +1,7 @@
 # pushbot
 
+**Русский** | [English](README.en.md)
+
 Маленький демон для CI/CD в homelab и на личных серверах. GitHub Actions собирает
 образ, пушит его в registry и последним шагом вызывает pushbot на сервере. pushbot
 раскладывает файлы проекта, пишет `.env` из GitHub Secrets и выполняет шаги из
