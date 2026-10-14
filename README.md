@@ -54,7 +54,7 @@ minutes).
 time are unlimited by default:
 
 ```
-deploy.example.com {
+pushbot.example.com {
     reverse_proxy 127.0.0.1:9800 {
         flush_interval -1    # stream the log immediately, no buffering
     }
@@ -66,10 +66,10 @@ deploy.example.com {
 ```nginx
 server {
     listen 443 ssl;
-    server_name deploy.example.com;
+    server_name pushbot.example.com;
 
-    ssl_certificate     /etc/letsencrypt/live/deploy.example.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/deploy.example.com/privkey.pem;
+    ssl_certificate     /etc/letsencrypt/live/pushbot.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/pushbot.example.com/privkey.pem;
 
     location / {
         proxy_pass http://127.0.0.1:9800;
@@ -85,7 +85,7 @@ server {
 
 server {
     listen 80;
-    server_name deploy.example.com;
+    server_name pushbot.example.com;
     return 301 https://$host$request_uri;
 }
 ```
@@ -95,7 +95,7 @@ the container, not the server. Either run the proxy with `network_mode: host`, o
 `listen: 172.17.0.1:9800` in `/etc/pushbot/config.yml` (the host address on the
 `docker0` network, check with `ip addr show docker0`) and proxy to that.
 
-Check: `curl https://deploy.example.com/healthz` should return `ok`.
+Check: `curl https://pushbot.example.com/healthz` should return `ok`.
 
 ## Managing the service
 
@@ -156,7 +156,7 @@ jobs:
 
       - uses: nikitakiselev/pushbot@v1
         with:
-          url: https://deploy.example.com
+          url: https://pushbot.example.com
           env: |
             IMAGE_TAG=${{ github.sha }}
             DB_PASSWORD=${{ secrets.DB_PASSWORD }}

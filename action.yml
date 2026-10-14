@@ -6,7 +6,7 @@ branding:
 
 inputs:
   url:
-    description: Base URL of the pushbot daemon, e.g. https://deploy.example.com
+    description: Base URL of the pushbot daemon, e.g. https://pushbot.example.com
     required: true
   env:
     description: KEY=VALUE lines written to .env in the project directory.
