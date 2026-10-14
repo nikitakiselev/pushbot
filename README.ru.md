@@ -96,6 +96,30 @@ server {
 
 Проверка: `curl https://deploy.example.com/healthz` должен вернуть `ok`.
 
+## Управление сервисом
+
+```sh
+sudo systemctl status pushbot           # запущен ли; последние строки лога
+sudo systemctl restart pushbot          # после правки /etc/pushbot/config.yml
+sudo systemctl stop pushbot             # ждёт завершения текущих деплоев (до 16 минут)
+sudo systemctl start pushbot
+sudo journalctl -u pushbot -f           # лог демона в реальном времени
+sudo journalctl -u pushbot --since today   # сводки деплоев, отклонённые запросы
+curl -s http://127.0.0.1:9800/healthz   # выводит "ok", если демон работает
+pushbot version
+```
+
+Логи деплоев, по файлу на деплой, свежие сверху:
+
+```sh
+sudo ls -t /var/lib/pushbot/logs/my-service/
+sudo sh -c 'cat "$(ls -t /var/lib/pushbot/logs/my-service/*.log | head -n1)"'
+```
+
+Обновление: запустите команду установки ещё раз (конфиг сохранится). Чтобы
+поставить конкретную версию, например для отката, добавьте `PUSHBOT_VERSION=v1.0.0`
+рядом с `PUSHBOT_ALLOW`.
+
 ## Подключение проекта
 
 На сервере ничего делать не нужно. В репозитории проекта:
