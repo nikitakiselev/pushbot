@@ -25,15 +25,15 @@ make there.
 Nothing to install: paste one of these prompts into the agent.
 
 ```text
-Connect this repository to my pushbot server. Instructions: https://raw.githubusercontent.com/nikitakiselev/pushbot/v1/skills/pushbot/SKILL.md
+Connect this repository to my pushbot server. Download https://raw.githubusercontent.com/nikitakiselev/pushbot/v1/skills/pushbot/SKILL.md with curl, read it in full and follow it.
 ```
 
 ```text
-Install pushbot on this server. Instructions: https://raw.githubusercontent.com/nikitakiselev/pushbot/v1/skills/pushbot/SKILL.md
+Install pushbot on this server. Download https://raw.githubusercontent.com/nikitakiselev/pushbot/v1/skills/pushbot/SKILL.md with curl, read it in full and follow it.
 ```
 
 ```text
-The pushbot deploy failed, find out why. Instructions: https://raw.githubusercontent.com/nikitakiselev/pushbot/v1/skills/pushbot/SKILL.md
+The pushbot deploy failed, find out why. Download https://raw.githubusercontent.com/nikitakiselev/pushbot/v1/skills/pushbot/SKILL.md with curl, read it in full and follow it.
 ```
 
 Or install the skill once, and the agent uses it whenever pushbot comes up:
@@ -43,7 +43,9 @@ npx skills add nikitakiselev/pushbot    # Codex, Cursor, Gemini CLI, Claude Code
 ```
 
 In Claude Code you can install it as a plugin instead:
-`/plugin install pushbot --marketplace nikitakiselev/pushbot`.
+`/plugin install pushbot --marketplace nikitakiselev/pushbot` (Claude Code 2.1.275 or
+later; on older versions, `/plugin marketplace add nikitakiselev/pushbot`, then
+`/plugin install pushbot@pushbot`).
 
 ## Server installation
 
@@ -211,6 +213,8 @@ reads it by itself. In the example:
 
 - `IMAGE_TAG` is the tag of the image just built. In `docker-compose.yml` use
   `image: ghcr.io/<owner>/<repo>:${IMAGE_TAG}`, and the server runs exactly this commit.
+  GHCR needs lower-case names: if the owner or repository name has capitals, write
+  the image name out in lower case here and in `tags`.
 - `DB_PASSWORD` is an example secret: add it to the repository under Settings → Secrets
   and variables → Actions (or to the `production` environment) and use it in compose
   as `${DB_PASSWORD}`.

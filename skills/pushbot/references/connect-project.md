@@ -15,7 +15,10 @@ curl -fsS https://pushbot.example.com/healthz   # must print: ok
 ```
 
 If there is no server yet, or this check fails, go to
-[install-server.md](install-server.md) first.
+[install-server.md](install-server.md) first. One exception: if the check fails
+only from inside the server's own network (a home LAN), the router may not
+support NAT loopback. Ask the user to try from another network, such as a phone
+hotspot, before suspecting the server.
 
 Ask the user whether the repository's owner is in the server's `allow` list
 (`/etc/pushbot/config.yml`). If it is not, the first deploy fails with 403. Adding
@@ -33,9 +36,10 @@ Find out:
   registry.
 - **Which repository files the containers read:** bind mounts such as
   `./nginx.conf:/etc/nginx/nginx.conf:ro` or `./config:/app/config`, and
-  `env_file:` entries. Each must be listed in `files`, or it will not exist on the
-  server. Named volumes and data directories (`./data:/var/lib/postgresql/data`)
-  need nothing.
+  `env_file:` entries other than `.env`. Each must be listed in `files`, or it
+  will not exist on the server. `.env` is written by pushbot and cannot be listed.
+  Named volumes and data directories (`./data:/var/lib/postgresql/data`) need
+  nothing.
 - **Which variables it needs:** `${VAR}` in compose files, `environment:` entries,
   `.env.example`, settings the application reads. Split them into secrets
   (passwords, API keys, tokens) and plain settings.
@@ -49,6 +53,10 @@ Find out:
 - **Ports.** Other projects on the same server may already use the host ports in
   the compose file. Ask the user which ports are free, or publish on `127.0.0.1`
   only when the application sits behind their reverse proxy.
+- **Whether it already runs on the server,** started by hand or by another deploy
+  (an SSH step in a workflow, a script). Then follow
+  [Moving an existing deployment](#moving-an-existing-deployment) before the
+  first deploy.
 
 ## 3. Make the compose file deployable
 
@@ -69,10 +77,37 @@ On the server, compose runs with nothing but the files from `files` and the
   (`build:`, source code mounts, dev-only services), do not rewrite it. Write a
   separate production file, for example `deploy/compose.yml`, and map it to
   `compose.yml` on the server in `pushbot.yml`.
-- **Take variables from `.env`:** write `${NAME}` in the compose file. Compose reads
-  `.env` from the project directory by itself.
+- **Pass variables to the containers explicitly.** pushbot writes `.env` into the
+  project directory, and compose uses it only to fill in `${NAME}` in the compose
+  file. A container sees a variable only when the compose file passes it:
+  `environment:` with `DB_PASSWORD: ${DB_PASSWORD}`, or `env_file: .env` to pass
+  all of them.
 - **Keep data in named volumes or under the project directory** (`./data`):
   pushbot never deletes them.
+
+### Moving an existing deployment
+
+If the application already runs on the server, plan the switch with the user
+before the first deploy; the user runs the server commands or approves them.
+
+- `sudo docker compose ls` on the server shows the running compose projects and
+  their compose files. pushbot runs compose in `/srv/apps/<name>`, so the new
+  compose project is called `<name>` unless the compose file sets a top-level
+  `name:`.
+- Named volumes belong to their compose project (`<project>_<volume>`). If the new
+  project name differs from the old one, the first deploy starts with empty
+  volumes. To keep them, use the old project name: a top-level `name:` in the
+  compose file, or the same `name` in `pushbot.yml`. With the same project name,
+  the first deploy replaces the old containers in place.
+- With a different project name, the old containers keep running and holding
+  their ports, and the first deploy fails with `port is already allocated`. The
+  user stops the old stack first, with `docker compose down` in its directory and
+  **without `-v`**, which would delete the volumes.
+- Data in the old directory (bind mounts such as `./data`) does not move by
+  itself: the user copies it into `/srv/apps/<name>/` while the old stack is
+  stopped.
+- Once pushbot deploys work, remove the old deploy from the workflow (SSH steps,
+  their secrets).
 
 ## 4. Write `pushbot.yml`
 
@@ -128,6 +163,8 @@ permissions:
   packages: write     # push the image to GHCR; the server pulls it with the same token
   id-token: write     # OIDC token for pushbot
 
+concurrency: deploy   # deploys go in push order; a newer pending run replaces an older one
+
 jobs:
   deploy:
     runs-on: ubuntu-latest      # ubuntu-24.04-arm for an arm64 server
@@ -151,15 +188,16 @@ jobs:
 
 Check every point:
 
-- **`id-token: write`** is set. Permissions set on a job replace the workflow-level
-  ones entirely, so a job with its own `permissions:` needs `id-token: write`
-  there too.
+- **`id-token: write`** is set. A `permissions:` block sets every permission it does
+  not list to `none`, and a job-level block replaces the workflow-level one. So
+  wherever you add `id-token: write`, list everything else the job needs too:
+  `contents: read` for checkout, `packages: write` to push to GHCR.
 - **The image tag is `${{ github.sha }}`** and `IMAGE_TAG` in `env` is the same
   value. Not `latest`: with the commit tag the server runs exactly this commit, and
   re-running an old workflow rolls back.
-- **The image name is lower case**, written out literally. Do not use
-  `ghcr.io/${{ github.repository }}`: it keeps capital letters (`MyOrg/App`), and
-  GHCR rejects them.
+- **The image name is lower case.** `ghcr.io/${{ github.repository }}` works only
+  when the owner and repository names have no capitals: GHCR rejects
+  `ghcr.io/MyOrg/App`. Otherwise write the name out in lower case.
 - **The architecture matches the server.** For arm64, `runs-on: ubuntu-24.04-arm`
   builds a native arm64 image (available for public and private repositories). To
   build both architectures on one runner, add `docker/setup-qemu-action@v3` and
@@ -171,7 +209,9 @@ Check every point:
   breaks the deploy. Store it base64-encoded and decode it in the application.
 - **Private images:** by default the action sends the job's `github.token`, and
   the server pulls from ghcr.io with it while the job runs. That needs
-  `packages: read` or `write` in the job running the pushbot step. Images in other
+  `packages: read` or `write` in the job running the pushbot step. An image
+  published from another repository is pullable only if its package grants this
+  repository access (package settings → Manage Actions access). Images in other
   private registries: see [troubleshooting.md](troubleshooting.md#deploy-failed-pushbot-failed).
 - **The pushbot step runs after `actions/checkout`** in the same job: it reads
   `pushbot.yml` and the files to send from the working tree. If building and
@@ -190,9 +230,12 @@ Check every point:
 Show the user every variable: its name, what it is, and whether it is a secret.
 
 - **Secrets:** the user sets the values. Do not ask for them in the chat. They run
-  `gh secret set DB_PASSWORD` (it prompts for the value; add
-  `--env production` to store it in the environment) or use Settings → Secrets and
-  variables → Actions. In Claude Code they can type `! gh secret set DB_PASSWORD`.
+  `gh secret set DB_PASSWORD` in their own terminal, or use Settings → Secrets and
+  variables → Actions. `gh` prompts for the value only in a terminal; without one
+  it reads stdin and can store an empty value. Repository secrets work with or
+  without `environment:`. To store a secret in the environment instead
+  (`--env production`), the environment must exist first: Settings →
+  Environments, or `gh api -X PUT repos/{owner}/{repo}/environments/production`.
 - **Plain settings:** write them into `env` directly (`LOG_LEVEL=info`) or keep
   them in repository variables (`LOG_LEVEL=${{ vars.LOG_LEVEL }}`).
 - **Check that every secret exists** with `gh secret list` (and
@@ -205,16 +248,23 @@ Ask the user before committing and pushing. After the push:
 
 ```sh
 sha=$(git rev-parse HEAD)
-run_id=$(gh run list --commit "$sha" --workflow deploy.yml --limit 1 --json databaseId --jq '.[0].databaseId')
-gh run watch "$run_id" --exit-status
+workflow=deploy.yml                     # the workflow file with the pushbot step
+for i in $(seq 1 12); do                # the run takes a few seconds to appear
+  run_id=$(gh run list --commit "$sha" --workflow "$workflow" --limit 1 --json databaseId --jq '.[0].databaseId')
+  [ -n "$run_id" ] && break
+  sleep 5
+done
+gh run watch "$run_id" --exit-status --compact
 gh run view "$run_id" --log-failed      # when it failed
 ```
 
-The run may need a few seconds to appear. The pushbot step's log ends with
+A run takes minutes. If your command times out, run `gh run watch` again; it
+picks up where the run is. The pushbot step's log ends with
 `PUSHBOT: success (…s)`. Then check the application itself (its URL or port): a
 successful `docker compose up -d` does not mean the application started. If the
-user has access to the server, `docker compose ps` and `docker compose logs` in
-`/srv/apps/<name>` show the containers.
+user has access to the server, the commands in
+[troubleshooting.md](troubleshooting.md#deployed-but-the-application-does-not-work)
+show the containers.
 
 When anything fails, go to [troubleshooting.md](troubleshooting.md).
 
@@ -225,5 +275,6 @@ When anything fails, go to [troubleshooting.md](troubleshooting.md).
 - [ ] images are tagged `${{ github.sha }}`, names are lower case, the architecture matches the server
 - [ ] the compose file on the server has no `build:`; it uses `${IMAGE_TAG}`
 - [ ] every bind-mounted repository file is in `files`
-- [ ] every variable the compose file uses is in `env`; every secret exists in GitHub
+- [ ] every variable is in `env` and reaches the containers (`environment:` or `env_file: .env`); every secret exists in GitHub
+- [ ] an existing deployment on the server is stopped or taken over, its data kept
 - [ ] the deploy ends with `PUSHBOT: success` and the application answers

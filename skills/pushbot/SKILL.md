@@ -27,6 +27,8 @@ These instructions are for pushbot v1 and the action `nikitakiselev/pushbot@v1`.
 If you are reading this from a URL rather than an installed skill, the files are
 next to this one:
 `https://raw.githubusercontent.com/nikitakiselev/pushbot/v1/skills/pushbot/references/<file>`.
+Download them in full (for example with `curl -fsSL`) rather than through a tool
+that summarizes pages: the exact commands and error texts matter.
 
 ## How pushbot behaves
 
@@ -44,8 +46,8 @@ It does not:
 - **CI needs no SSH key and no pushbot token.** Authentication is the job's OIDC
   token, which requires `permissions: id-token: write`. The only secrets are the
   application's own, passed through `env`.
-- **`pushbot.yml` has exactly three keys: `name`, `files`, `steps`.** Any other key
-  is an error. A step is `- run: <shell script>` and nothing else.
+- **`pushbot.yml` knows three keys, all optional: `name`, `files`, `steps`.** Any
+  other key is an error. A step is `- run: <shell script>` and nothing else.
 - **Steps run in `/srv/apps/<name>` as the `pushbot` user** with `sh -e`, without
   the daemon's environment. They get the `env` variables plus `PUSHBOT_PROJECT`,
   `PUSHBOT_REPOSITORY`, `PUSHBOT_SHA`, `PUSHBOT_REF`, `PUSHBOT_ACTOR`,
@@ -69,4 +71,5 @@ It does not:
   after the user agrees. Read-only checks need no confirmation.
 - **Prove it works.** A connected project is done when a deploy ends with
   `PUSHBOT: success` and the application answers. A server is done when
-  `sudo pushbot doctor --url <public url>` reports no failures.
+  `sudo pushbot doctor --url <public url>` reports no failures (with one exception
+  on home networks, see [install-server.md](references/install-server.md#4-verify)).

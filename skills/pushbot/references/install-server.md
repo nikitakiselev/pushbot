@@ -2,7 +2,8 @@
 
 You have a shell on the server, directly or over SSH, and the user can use sudo.
 Show every command that changes the system and run it only after the user agrees.
-You are done when `sudo pushbot doctor --url https://<host>` reports no failures.
+You are done when `sudo pushbot doctor --url https://<host>` reports no failures
+(with one exception on home networks, see [Verify](#4-verify)).
 
 ## 1. Gather what you need
 
@@ -10,8 +11,9 @@ Ask the user:
 
 - **Who may deploy.** A GitHub login or organization, optionally with a
   repository name pattern: `alice/*` (all of alice's repositories, including
-  future ones) or `alice/homelab-*`. This is required: without it, a token from
-  any repository on GitHub would pass, because GitHub signs tokens for everyone.
+  future ones) or `alice/homelab-*`. pushbot does not start without it: GitHub
+  signs tokens for every repository on GitHub, and `allow` is what keeps other
+  people's repositories out.
 - **The public hostname** for pushbot, such as `pushbot.example.com`, with a DNS
   record pointing at this server. GitHub-hosted runners connect from the internet,
   so pushbot needs a public address with HTTPS.
@@ -21,11 +23,11 @@ Then look at the server. These commands change nothing:
 ```sh
 uname -m                          # x86_64 or aarch64; nothing else is supported
 systemctl --version | head -n1    # systemd is required
-docker version --format '{{.Server.Version}}'
-docker compose version            # the Compose plugin is required
+sudo docker version --format '{{.Server.Version}}'
+sudo docker compose version       # the Compose plugin is required
 sudo ss -ltnp | grep -E ':(80|443|9800) '
 systemctl is-active caddy nginx
-docker ps --format '{{.Names}}\t{{.Image}}\t{{.Ports}}'
+sudo docker ps --format '{{.Names}}\t{{.Image}}\t{{.Ports}}'
 ```
 
 If Docker or the Compose plugin is missing, the user installs them first
@@ -60,6 +62,10 @@ Check that the daemon answers locally:
 ```sh
 curl -fsS http://127.0.0.1:9800/healthz   # prints: ok
 ```
+
+On start, pushbot looks up the `allow` owners on GitHub before it listens, which
+can take a few seconds. If `/healthz` still fails after that, read
+`sudo journalctl -u pushbot -n 50`: a misspelled owner stops the service.
 
 ## 3. Reverse proxy
 
@@ -150,13 +156,18 @@ sudo pushbot doctor --url https://pushbot.example.com
 
 `doctor` checks the config, the service, Docker access for the `pushbot` user,
 the directories, the server clock, access to GitHub's OIDC keys, the `allow`
-owners and the public URL through the proxy. Every failure or warning comes with
-a fix on the next line. Apply the fixes (with the user's agreement) and run it
-again until there are no failures. `doctor` exists since v1.3.0; on an older
-version, upgrade first.
+owners and the public URL through the proxy. Most failures and warnings end with
+`→` and the fix. Apply the fixes (with the user's agreement) and run it again
+until there are no failures. `doctor` exists since v1.3.0; on an older version,
+upgrade first.
 
 From outside the server, `curl -fsS https://pushbot.example.com/healthz` must print
 `ok`.
+
+The public URL check runs from the server itself. On a home network whose router
+has no NAT loopback (hairpinning), it fails although GitHub reaches the server
+fine. If the `curl` above works from another network (a phone hotspot), that one
+failure is not a problem; do not change the proxy because of it.
 
 ## 5. Hand over
 
@@ -167,22 +178,26 @@ and which repositories `allow` admits. To connect a repository, follow
 ## Maintenance
 
 - **Allow more repositories:** add a pattern to `allow` in
-  `/etc/pushbot/config.yml`, then `sudo systemctl restart pushbot`. Patterns are
-  `owner/repo-glob`; the owner is literal, the repository name is a glob. On
-  startup pushbot resolves each owner to its numeric GitHub ID, so run
-  `sudo pushbot doctor` after editing to catch a misspelled owner.
+  `/etc/pushbot/config.yml`. Patterns are `owner/repo-glob`; the owner is
+  literal, the repository name is a glob. Before restarting, run
+  `sudo pushbot doctor`: it reads the edited file and catches a misspelled owner,
+  which would stop the service on restart (and fail every project's deploys).
+  Then `sudo systemctl restart pushbot` and check `systemctl is-active pushbot`.
 - **Upgrade:** `sudo pushbot upgrade` (latest release) or
   `sudo pushbot upgrade --version v1.3.0` (a specific one, e.g. to roll back). It
   keeps the config, and the restart waits for running deploys. Versions before
   v1.2.0 have no `upgrade`: run the install command again.
 - **Restart after any config change:** `sudo systemctl restart pushbot`. It waits
-  for running deploys (up to 16 minutes).
+  for running deploys, up to 16 minutes. If your command times out meanwhile, check
+  `systemctl status pushbot` instead of restarting again.
 - **Other settings** in `/etc/pushbot/config.yml`, with their defaults:
   `deploy_timeout: 15m`, `max_bundle_size: 50MB`, `max_unpacked_size: 200MB`,
   `log_retention: 20`, `audience: pushbot`, `metrics_listen` (Prometheus, off by
   default). Raising `deploy_timeout` means raising the proxy timeout too.
-- **Release a project name** held by another repository: remove its entry from
-  `/var/lib/pushbot/projects.json`. No restart needed.
+- **Release a project name** held by another repository: back up
+  `/var/lib/pushbot/projects.json`, remove the name's entry and check that the file
+  is still valid JSON (`sudo jq . /var/lib/pushbot/projects.json` if `jq` is
+  installed): a broken file fails every deploy with 500. No restart needed.
 - **Logs:** `sudo journalctl -u pushbot` (daemon, rejected requests, deploy
   summaries) and `/var/lib/pushbot/logs/<name>/` (one file per deploy, the last
   20 kept; `sudo ls -t` lists the newest first).

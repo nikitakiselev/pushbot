@@ -25,15 +25,15 @@ Cursor, Gemini CLI и других. Он объясняет агенту, как
 Ничего устанавливать не нужно: вставьте агенту один из промптов.
 
 ```text
-Подключи этот репозиторий к моему серверу pushbot. Инструкция: https://raw.githubusercontent.com/nikitakiselev/pushbot/v1/skills/pushbot/SKILL.md
+Подключи этот репозиторий к моему серверу pushbot. Скачай https://raw.githubusercontent.com/nikitakiselev/pushbot/v1/skills/pushbot/SKILL.md через curl, прочитай целиком и следуй инструкции.
 ```
 
 ```text
-Установи pushbot на этот сервер. Инструкция: https://raw.githubusercontent.com/nikitakiselev/pushbot/v1/skills/pushbot/SKILL.md
+Установи pushbot на этот сервер. Скачай https://raw.githubusercontent.com/nikitakiselev/pushbot/v1/skills/pushbot/SKILL.md через curl, прочитай целиком и следуй инструкции.
 ```
 
 ```text
-Деплой через pushbot упал, выясни почему. Инструкция: https://raw.githubusercontent.com/nikitakiselev/pushbot/v1/skills/pushbot/SKILL.md
+Деплой через pushbot упал, выясни почему. Скачай https://raw.githubusercontent.com/nikitakiselev/pushbot/v1/skills/pushbot/SKILL.md через curl, прочитай целиком и следуй инструкции.
 ```
 
 Или установите скилл один раз, и агент будет использовать его каждый раз, когда речь
@@ -44,7 +44,9 @@ npx skills add nikitakiselev/pushbot    # Codex, Cursor, Gemini CLI, Claude Code
 ```
 
 В Claude Code его можно поставить и как плагин:
-`/plugin install pushbot --marketplace nikitakiselev/pushbot`.
+`/plugin install pushbot --marketplace nikitakiselev/pushbot` (Claude Code 2.1.275 и
+новее; в более старых — `/plugin marketplace add nikitakiselev/pushbot`, затем
+`/plugin install pushbot@pushbot`).
 
 ## Установка на сервер
 
@@ -211,7 +213,9 @@ jobs:
 
 - `IMAGE_TAG` — тег только что собранного образа. В `docker-compose.yml` укажите
   `image: ghcr.io/<owner>/<repo>:${IMAGE_TAG}`, и сервер запустит образ именно этого
-  коммита.
+  коммита. GHCR принимает имена только в нижнем регистре: если в имени владельца или
+  репозитория есть заглавные буквы, впишите имя образа в нижнем регистре и здесь, и
+  в `tags`.
 - `DB_PASSWORD` — пример секрета: добавьте его в репозитории в Settings → Secrets and
   variables → Actions (или в окружение `production`) и используйте в compose как
   `${DB_PASSWORD}`.

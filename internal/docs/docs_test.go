@@ -77,8 +77,8 @@ func TestSkillFrontmatter(t *testing.T) {
 
 var linkRe = regexp.MustCompile(`\]\(([^)\s]+)\)`)
 
-func TestSkillLinks(t *testing.T) {
-	for _, file := range skillFiles(t) {
+func TestLinks(t *testing.T) {
+	for _, file := range append([]string{"README.md", "README.ru.md"}, skillFiles(t)...) {
 		for i, line := range proseLines(readFile(t, file)) {
 			for _, m := range linkRe.FindAllStringSubmatch(line, -1) {
 				target := m[1]
@@ -155,7 +155,7 @@ func codeBlocks(md string) []codeBlock {
 		case cur == nil && strings.HasPrefix(trimmed, "```"):
 			cur = &codeBlock{lang: strings.TrimPrefix(trimmed, "```"), line: i + 1}
 			indent = len(line) - len(trimmed)
-		case cur != nil && trimmed == "```":
+		case cur != nil && strings.TrimSpace(line) == "```":
 			blocks = append(blocks, *cur)
 			cur = nil
 		case cur != nil:
@@ -190,6 +190,20 @@ func hasHeading(md, anchor string) bool {
 		}
 	}
 	return false
+}
+
+func TestSlug(t *testing.T) {
+	for heading, want := range map[string]string{
+		"3. Reverse proxy":                 "3-reverse-proxy",
+		"4. Write `pushbot.yml`":           "4-write-pushbotyml",
+		"Deploy failed: `PUSHBOT: failed`": "deploy-failed-pushbot-failed",
+		"Deployed, but it does not work":   "deployed-but-it-does-not-work",
+		"Конфиг демона":                    "конфиг-демона",
+	} {
+		if got := slug(heading); got != want {
+			t.Errorf("slug(%q) = %q, want %q", heading, got, want)
+		}
+	}
 }
 
 var slugDropRe = regexp.MustCompile(`[^\p{L}\p{N} _-]`)

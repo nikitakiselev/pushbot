@@ -32,7 +32,7 @@ sudo pushbot doctor --url https://pushbot.example.com
 
 | Message | Cause | Fix |
 |---|---|---|
-| `no OIDC token available: add 'permissions: id-token: write' ...` | The job has no `id-token: write`. A job-level `permissions:` block replaces the workflow-level one. Pull requests from forks never get tokens. | Add `id-token: write` to the job (or workflow) permissions. |
+| `no OIDC token available: add 'permissions: id-token: write' ...` | The job has no `id-token: write`. A job-level `permissions:` block replaces the workflow-level one. Pull requests from forks never get tokens. | Add `id-token: write` to the job (or workflow) permissions. A `permissions:` block sets everything it does not list to `none`, so list the rest too: `contents: read`, `packages: write`. |
 | `pushbot.yml not found` | No `actions/checkout` before the step, or the manifest is elsewhere. | Add `actions/checkout`, or set the `config` input to the manifest's path. |
 | `yq is required on the runner` (or `jq`, `curl`, `tar`) | A self-hosted runner or job container without these tools. | Install them, or run the job on `ubuntu-latest`. |
 | `tar: <path>: Cannot stat: No such file or directory` | A `files` entry does not exist in the checkout: a typo, a gitignored or generated file. | Fix the path, or generate the file in an earlier step. |
@@ -48,7 +48,7 @@ sudo pushbot doctor --url https://pushbot.example.com
 | 7 | Connection refused: the proxy is not running or the port is closed. | Check the proxy on the server and the firewall for 443. |
 | 28 | Timed out: a firewall drops the traffic, or the address is not reachable from the internet (a LAN-only IP). | GitHub-hosted runners need a public address. |
 | 35, 60 | TLS failed: no certificate, an expired one or one for another name. | Fix the certificate on the proxy. |
-| 18, 52, 56, 92 | The connection broke mid-request: a proxy limit on body size or time. | Check the proxy against the requirements in [install-server.md](install-server.md#3-reverse-proxy). |
+| 18, 52, 55, 56, 92 | The connection broke mid-request: a proxy limit on body size or time. | Check the proxy against the requirements in [install-server.md](install-server.md#3-reverse-proxy). |
 
 `the deploy log ended unexpectedly (connection lost?)`: the proxy closed the
 stream, usually because its timeout is shorter than the deploy. The deploy keeps
@@ -65,8 +65,8 @@ before:
 
 | Code | Reason | Cause | Fix |
 |---|---|---|---|
-| 403 | `forbidden: repository <owner>/<repo> is not in the allow list` | The server does not admit this repository. | On the server, add a pattern to `allow` in `/etc/pushbot/config.yml` and `sudo systemctl restart pushbot`. |
-| 403 | `forbidden: project name is taken by another repository: "<name>" belongs to <owner>/<repo>` | Another repository deployed under this name first. | Set another `name` in `pushbot.yml`. If the old repository is gone, release the name: remove its entry from `/var/lib/pushbot/projects.json` (no restart needed). |
+| 403 | `forbidden: repository <owner>/<repo> is not in the allow list` | The server does not admit this repository. | On the server, add a pattern to `allow` in `/etc/pushbot/config.yml`, check it with `sudo pushbot doctor`, then `sudo systemctl restart pushbot` (see [install-server.md](install-server.md#maintenance)). |
+| 403 | `forbidden: project name is taken by another repository: "<name>" belongs to <owner>/<repo>` | Another repository deployed under this name first. | Set another `name` in `pushbot.yml`. If the old repository is gone, release the name on the server (see [install-server.md](install-server.md#maintenance)). |
 | 401 | `unauthorized: oidc: expected audience "<a>" got ["<b>"]` | The action's `audience` input differs from the daemon's `audience` setting. | Make them equal; the default is `pushbot` on both sides. |
 | 401 | `unauthorized: oidc: token is expired ...` or `... before the nbf (not before) time ...` | The server clock is wrong. | Enable time sync on the server: `sudo timedatectl set-ntp true`. `doctor` checks the clock. |
 | 401 | `unauthorized: failed to verify signature: ...` | The server cannot fetch GitHub's OIDC keys (DNS, outbound HTTPS). | Run `sudo pushbot doctor`; fix outbound access to `token.actions.githubusercontent.com`. |
@@ -93,14 +93,16 @@ Common causes:
 
 | Output | Cause | Fix |
 |---|---|---|
-| `unauthorized`, `denied` while pulling from ghcr.io | The server has no credentials for a private image. | Keep `registry-auth` at its default `true`, and give the job `packages: read` (or `write`). |
-| `unauthorized`, `denied` from another registry (Docker Hub, a private one) | With `registry-auth: true`, steps use only the ghcr.io credentials from the job, not the server's own `docker login`. | Set `registry-auth: "false"` and log the `pushbot` user in on the server: `sudo -u pushbot -H docker login <registry>`. |
-| `manifest unknown`, `not found` | The image or tag was never pushed: the name in the compose file differs from the one built (case, owner, suffix), or `IMAGE_TAG` is missing from `env`. | Make the names match; add `IMAGE_TAG=${{ github.sha }}` to `env`. |
+| `unauthorized`, `denied` while pulling from ghcr.io | The server has no credentials for a private image, or the image belongs to another repository's package. | Keep `registry-auth` at its default `true`, and give the job `packages: read` (or `write`). For another repository's image, grant this repository access in the package settings (Manage Actions access). |
+| `unauthorized`, `denied` from another registry (Docker Hub, a private one) | With `registry-auth: true`, steps use only the ghcr.io credentials from the job, not the server's own `docker login`. | Set `registry-auth: "false"` and log the `pushbot` user in on the server: `sudo -u pushbot -H docker login <registry>`. This drops the job's ghcr.io credentials too, so private ghcr.io images then need `docker login ghcr.io` with a personal access token as well. |
+| `toomanyrequests` | Docker Hub's rate limit for anonymous pulls. With `registry-auth: true` the server's own Docker Hub login is not used. | Re-run later, or set `registry-auth: "false"` and `docker login` on the server as above. |
+| `invalid reference format` | `IMAGE_TAG` is missing from `env`, so the image becomes `ghcr.io/<owner>/<repo>:`; or the name has capitals (`repository name must be lowercase`). | Add `IMAGE_TAG=${{ github.sha }}` to `env`; write the image name in lower case. |
+| `manifest unknown`, `not found` | The image or tag was never pushed: the name in the compose file differs from the one built (owner, repository, suffix). | Make the names match. |
 | `no matching manifest for linux/arm64` (or `amd64`); `exec format error` in container logs | The image was built for another CPU architecture. | Build on `ubuntu-24.04-arm` for arm64 servers, or build multi-platform (see [connect-project.md](connect-project.md#5-write-the-workflow)). |
 | `variable is not set. Defaulting to a blank string` | A variable used in the compose file is missing from `env`. | Add it to `env`. |
 | `no configuration file provided: not found` | No compose file in the project directory under a default name. | List it in `files`, mapped to `compose.yml` if it has another name. |
 | `port is already allocated`, `address already in use` | Another project or service uses the host port. | Pick a free port in the compose file. |
-| `not a directory`, `Are you trying to mount a directory onto a file` | A bind-mounted file is not in `files`, so Docker created a directory in its place. | Add the file to `files`; on the server, remove the empty directory Docker created. |
+| `not a directory`, `Are you trying to mount a directory onto a file` | A bind-mounted file is not in `files`, so Docker created a directory in its place. | Add the file to `files`. Before the next deploy, remove the empty directory Docker created (`sudo rmdir /srv/apps/<name>/<file>`), or the copy fails with `is a directory`. |
 | `permission denied ... docker.sock`, `docker: not found` | The `pushbot` user cannot use Docker. | `sudo pushbot doctor` names the fix. |
 
 **`timeout`:** the deploy, including waiting for the previous deploy of the same
@@ -110,21 +112,26 @@ foreground `docker compose up` without `-d`. Fix the step, or raise
 `deploy_timeout` on the server (and the proxy timeout with it).
 
 **`copy <file>: ...`, `write .env: ...`, `create project directory: ...`:** pushbot
-cannot write into `/srv/apps/<name>`, usually because a file there was created by
-root. Fix the ownership of the files named in the error only:
-`sudo chown pushbot:pushbot /srv/apps/<name>/<file>`. Do not `chown -R` the
-project directory: container data under it has its own owners.
+writes each file to a temporary file next to it and renames it into place, so it
+needs write access to the directory that holds the file: `/srv/apps/<name>` or a
+subdirectory of it. The usual cause is a directory created by root or by a
+container. Fix the owner of that directory only:
+`sudo chown pushbot:pushbot /srv/apps/<name>/<dir>`. Do not `chown -R` the project
+directory: container data under it has its own owners. `... is a directory` means
+a directory sits where the file should go (see the bind mount row above).
 
 ## Deployed, but the application does not work
 
-On the server:
+On the server (`/srv/apps` is readable only by root and `pushbot`, hence `sudo sh -c`):
 
 ```sh
-cd /srv/apps/<name>
-sudo docker compose ps
-sudo docker compose logs --tail 100
-sudo cut -d= -f1 .env      # which variables were written, without their values
+sudo sh -c 'cd /srv/apps/<name> && docker compose ps && docker compose logs --tail 100'
+sudo cut -d= -f1 /srv/apps/<name>/.env   # which variables were written, without their values
 ```
+
+If a variable is in `.env` but the application does not see it, the compose file
+does not pass it to the container: see `environment:` / `env_file: .env` in
+[connect-project.md](connect-project.md#3-make-the-compose-file-deployable).
 
 Do not print `.env` itself: it holds the secrets.
 
