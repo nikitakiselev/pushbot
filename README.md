@@ -1,66 +1,67 @@
 # pushbot
 
-**Русский** | [English](README.en.md)
+**English** | [Русский](README.ru.md)
 
-Маленький демон для CI/CD в homelab и на личных серверах. GitHub Actions собирает
-образ, пушит его в registry и последним шагом вызывает pushbot на сервере. pushbot
-раскладывает файлы проекта, пишет `.env` из GitHub Secrets и выполняет шаги из
-`pushbot.yml`. SSH-доступ из CI не нужен, секретов для авторизации тоже: запросы
-проверяются по OIDC-токенам GitHub Actions.
+A tiny CI/CD daemon for homelabs and personal servers. GitHub Actions builds an
+image, pushes it to a registry and, as its last step, calls pushbot on the server.
+pushbot puts the project files in place, writes `.env` from GitHub Secrets and runs
+the steps from `pushbot.yml`. CI needs no SSH access and no auth secrets: requests
+are verified with GitHub Actions OIDC tokens.
 
 ```mermaid
 flowchart LR
     A[git push] --> B[GitHub Actions]
-    B -->|HTTP| C[pushbot на сервере]
-    C --> D["выполняет команды деплоя<br/>из pushbot.yml"]
+    B -->|HTTP| C[pushbot on the server]
+    C --> D["runs the deploy commands<br/>from pushbot.yml"]
 ```
 
-## Установка на сервер
+## Server installation
 
-Нужны Linux с systemd и Docker.
+Requires Linux with systemd and Docker.
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/nikitakiselev/pushbot/main/install.sh \
   | sudo PUSHBOT_ALLOW='your-github-login/*' sh
 ```
 
-**`PUSHBOT_ALLOW`** — из каких репозиториев GitHub разрешено деплоить на этот
-сервер. Формат `владелец/маска-репозитория`: `your-github-login/*` — любой ваш
-репозиторий (включая будущие), `your-github-login/homelab-*` — только с таким
-префиксом. Без этого ограничения прошёл бы токен любого репозитория на GitHub:
-GitHub подписывает токены для всех.
+**`PUSHBOT_ALLOW`** — which GitHub repositories may deploy to this server. The
+format is `owner/repo-pattern`: `your-github-login/*` allows any of your
+repositories (including future ones), `your-github-login/homelab-*` only those with
+that prefix. Without this restriction a token from any repository on GitHub would
+pass: GitHub signs tokens for everyone.
 
-Значение записывается в `allow` нового `/etc/pushbot/config.yml`. Если конфиг уже
-есть, переменная игнорируется. Если её не передать, скрипт создаст конфиг с
-заглушкой и не запустит сервис, пока вы не впишете `allow` сами. Через переменную
-задаётся один шаблон; если нужно несколько, допишите их в `allow` в конфиге
-(см. [Конфиг демона](#конфиг-демона)).
+The value goes into `allow` of a new `/etc/pushbot/config.yml`. If the config
+already exists, the variable is ignored. If you omit it, the script creates a config
+with a placeholder and does not start the service until you fill in `allow`
+yourself. The variable sets a single pattern; for more, add them to `allow` in the
+config (see [Daemon config](#daemon-config)).
 
-Скрипт (его стоит прочитать, он короткий) ставит бинарник в `/usr/local/bin`,
-создаёт пользователя `pushbot` в группе `docker`, директории `/srv/apps` и
-`/var/lib/pushbot`, конфиг `/etc/pushbot/config.yml` и systemd-сервис. Повторный
-запуск обновляет pushbot и не трогает конфиг.
+The script (worth reading, it is short) installs the binary to `/usr/local/bin`,
+creates the `pushbot` user in the `docker` group, the `/srv/apps` and
+`/var/lib/pushbot` directories, the `/etc/pushbot/config.yml` config and a systemd
+service. Running it again upgrades pushbot and leaves the config alone.
 
 ### Reverse proxy
 
-Демон слушает `127.0.0.1:9800` по обычному HTTP. Наружу его отдаёт reverse proxy с
-TLS: в запросе передаются секреты из `env`, так что голый HTTP наружу недопустим.
-От прокси нужно три вещи: пропускать тело запроса до ~50 МБ (архив с файлами),
-не буферизовать ответ (иначе лог деплоя придёт в Actions только в конце) и не
-обрывать соединение, пока идёт деплой (до 15 минут).
+The daemon listens on `127.0.0.1:9800` over plain HTTP. A reverse proxy with TLS
+exposes it: requests carry secrets from `env`, so plain HTTP must not face the
+internet. The proxy has to do three things: accept request bodies up to ~50 MB (the
+files archive), not buffer the response (otherwise the deploy log reaches Actions
+only at the end), and keep the connection open while the deploy runs (up to 15
+minutes).
 
-**Caddy** (`Caddyfile`). Сертификат Caddy получит сам, размер тела и время ответа
-по умолчанию не ограничены:
+**Caddy** (`Caddyfile`). Caddy gets the certificate itself; body size and response
+time are unlimited by default:
 
 ```
 deploy.example.com {
     reverse_proxy 127.0.0.1:9800 {
-        flush_interval -1    # отдавать лог сразу, без буфера
+        flush_interval -1    # stream the log immediately, no buffering
     }
 }
 ```
 
-**nginx** (`/etc/nginx/sites-available/pushbot`, сертификат — например, от certbot):
+**nginx** (`/etc/nginx/sites-available/pushbot`, certificate e.g. from certbot):
 
 ```nginx
 server {
@@ -76,9 +77,9 @@ server {
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
 
-        client_max_body_size 64m;   # по умолчанию 1m; архив до 50 МБ (max_bundle_size)
-        proxy_buffering off;        # отдавать лог сразу, без буфера
-        proxy_read_timeout 20m;     # больше deploy_timeout (15m)
+        client_max_body_size 64m;   # default is 1m; the archive is up to 50 MB (max_bundle_size)
+        proxy_buffering off;        # stream the log immediately, no buffering
+        proxy_read_timeout 20m;     # longer than deploy_timeout (15m)
     }
 }
 
@@ -89,25 +90,25 @@ server {
 }
 ```
 
-Если прокси сам работает в Docker-контейнере, `127.0.0.1` внутри контейнера — это
-сам контейнер, а не сервер. Тогда либо запустите прокси с `network_mode: host`, либо
-укажите в `/etc/pushbot/config.yml` `listen: 172.17.0.1:9800` (адрес хоста в сети
-`docker0`, проверьте `ip addr show docker0`) и проксируйте на него.
+If the proxy itself runs in a Docker container, `127.0.0.1` inside the container is
+the container, not the server. Either run the proxy with `network_mode: host`, or set
+`listen: 172.17.0.1:9800` in `/etc/pushbot/config.yml` (the host address on the
+`docker0` network, check with `ip addr show docker0`) and proxy to that.
 
-Проверка: `curl https://deploy.example.com/healthz` должен вернуть `ok`.
+Check: `curl https://deploy.example.com/healthz` should return `ok`.
 
-## Подключение проекта
+## Adding a project
 
-На сервере ничего делать не нужно. В репозитории проекта:
+Nothing to do on the server. In the project repository:
 
-**1. `pushbot.yml` в корне:**
+**1. `pushbot.yml` in the root:**
 
 ```yaml
 files:
   - docker-compose.yml
 ```
 
-**2. Шаг в workflow:**
+**2. A step in the workflow:**
 
 ```yaml
 on:
@@ -116,8 +117,8 @@ on:
 
 permissions:
   contents: read
-  packages: write     # пуш образа в GHCR
-  id-token: write     # OIDC-токен для pushbot
+  packages: write     # push the image to GHCR
+  id-token: write     # OIDC token for pushbot
 
 jobs:
   deploy:
@@ -138,63 +139,62 @@ jobs:
             DB_PASSWORD=${{ secrets.DB_PASSWORD }}
 ```
 
-В `docker-compose.yml` укажите `image: ghcr.io/<owner>/<repo>:${IMAGE_TAG}`.
+In `docker-compose.yml` use `image: ghcr.io/<owner>/<repo>:${IMAGE_TAG}`.
 
-**3. Push.** Проект появится в `/srv/apps/<имя репозитория>`.
+**3. Push.** The project appears in `/srv/apps/<repository name>`.
 
 ## `pushbot.yml`
 
 ```yaml
-name: my-service          # необязательно; по умолчанию — имя репозитория в нижнем регистре
+name: my-service          # optional; defaults to the lower-cased repository name
 
-files:                    # что положить в /srv/apps/<name>
+files:                    # what to put into /srv/apps/<name>
   - docker-compose.yml
-  - config/                                  # директория целиком
-  - deploy/compose.prod.yml: compose.yml     # с переименованием
-  - deploy/: .                               # содержимое директории в корень проекта
+  - config/                                  # a whole directory
+  - deploy/compose.prod.yml: compose.yml     # renamed
+  - deploy/: .                               # directory contents into the project root
 
-steps:                    # необязательно; по умолчанию:
+steps:                    # optional; defaults to:
   - run: docker compose pull
   - run: docker compose up -d --remove-orphans
 ```
 
-Порядок деплоя: файлы из `files` → `.env` → шаги по очереди.
+Deploy order: files from `files` → `.env` → steps, one by one.
 
-- **Файлы** перезаписываются, но **ничего не удаляется**: данные контейнеров в
-  директории проекта (`./data` и т. п.) в безопасности. Пути относительные, без `..`;
-  symlink'и не поддерживаются.
-- **`.env`** целиком перезаписывается значениями из входа `env` (права `0600`,
-  значения в одинарных кавычках, чтобы compose не подставлял `$`). Указывать `.env`
-  в `files` нельзя.
-- **Шаги** выполняются как `sh -e -c '<run>'` в директории проекта, первая ошибка
-  останавливает деплой. В окружении — переменные из `env` и `PUSHBOT_PROJECT`,
+- **Files** are overwritten, but **nothing is deleted**: container data in the
+  project directory (`./data` etc.) is safe. Paths are relative, without `..`;
+  symlinks are not supported.
+- **`.env`** is fully rewritten from the `env` input (mode `0600`, values in single
+  quotes so compose does not expand `$`). `.env` cannot be listed in `files`.
+- **Steps** run as `sh -e -c '<run>'` in the project directory; the first error stops
+  the deploy. The environment contains the `env` variables plus `PUSHBOT_PROJECT`,
   `PUSHBOT_REPOSITORY`, `PUSHBOT_SHA`, `PUSHBOT_REF`, `PUSHBOT_ACTOR`,
-  `PUSHBOT_RUN_ID`, `PUSHBOT_RUN_URL`. Окружение демона не наследуется.
+  `PUSHBOT_RUN_ID`, `PUSHBOT_RUN_URL`. The daemon's environment is not inherited.
 
-Автоматического отката нет: чтобы откатиться, перезапустите workflow для
-предыдущего коммита.
+There is no automatic rollback: to roll back, re-run the workflow for the previous
+commit.
 
-## Входы action
+## Action inputs
 
-| Вход | По умолчанию | |
+| Input | Default | |
 |---|---|---|
-| `url` | — | адрес pushbot, обязателен |
-| `env` | пусто | строки `KEY=VALUE` для `.env` |
-| `config` | `pushbot.yml` | путь к манифесту от корня репозитория |
-| `registry-auth` | `true` | передать временный `github.token`, чтобы сервер мог стянуть приватный образ из ghcr.io |
-| `audience` | `pushbot` | audience OIDC-токена |
+| `url` | — | pushbot address, required |
+| `env` | empty | `KEY=VALUE` lines for `.env` |
+| `config` | `pushbot.yml` | manifest path relative to the repository root |
+| `registry-auth` | `true` | send the temporary `github.token` so the server can pull a private image from ghcr.io |
+| `audience` | `pushbot` | OIDC token audience |
 
-## Конфиг демона
+## Daemon config
 
-`/etc/pushbot/config.yml`, после изменений — `systemctl restart pushbot`.
+`/etc/pushbot/config.yml`; after changes run `systemctl restart pushbot`.
 
 ```yaml
 listen: 127.0.0.1:9800
 projects_root: /srv/apps
 allow:
-  - your-github-login/*       # владелец — без масок, имя репозитория — маска
+  - your-github-login/*       # owner is literal, the repository name is a pattern
   - my-org/homelab-*
-# необязательно (значения по умолчанию):
+# optional (defaults):
 # state_dir: /var/lib/pushbot
 # audience: pushbot
 # deploy_timeout: 15m
@@ -203,41 +203,42 @@ allow:
 # log_retention: 20
 ```
 
-При старте pushbot узнаёт у GitHub числовые ID владельцев из `allow` и сверяет
-токены по ним, а не по имени (имя аккаунта можно освободить и занять заново). ID
-кешируются в `owners.json` на случай, если GitHub недоступен. Если задана переменная
-окружения `GITHUB_TOKEN`, запросы к API идут с ней (выше лимит запросов).
+On startup pushbot looks up the numeric GitHub IDs of the owners in `allow` and
+matches tokens by ID rather than by name (an account name can be released and taken
+by someone else). The IDs are cached in `owners.json` in case GitHub is unreachable.
+If the `GITHUB_TOKEN` environment variable is set, API requests use it (higher rate
+limit).
 
-## Безопасность
+## Security
 
-- Право пушить в разрешённый репозиторий = право выполнять команды на сервере от
-  пользователя `pushbot`, а группа `docker` фактически равна root. Это осознанный
-  компромисс для личного использования; защита — OIDC и `allow`.
-- Токен проверяется по подписи GitHub, `iss`, `aud`, сроку жизни и одноразовости
-  (`jti`). PR из форков OIDC-токенов не получают.
-- Первый деплой закрепляет имя проекта за репозиторием (по `repository_id`); другой
-  репозиторий с тем же `name` получит 403. Освободить имя — удалить запись из
-  `/var/lib/pushbot/projects.json`.
-- Значения из `env` маскируются как `***` в логах на сервере; в логе Actions секреты
-  маскирует GitHub.
+- Push access to an allowed repository = the right to run commands on the server as
+  the `pushbot` user, and the `docker` group is effectively root. This is a
+  deliberate trade-off for personal use; the protection is OIDC and `allow`.
+- A token is checked for GitHub's signature, `iss`, `aud`, lifetime and single use
+  (`jti`). Pull requests from forks do not get OIDC tokens.
+- The first deploy binds the project name to the repository (by `repository_id`);
+  another repository with the same `name` gets 403. To release a name, remove its
+  entry from `/var/lib/pushbot/projects.json`.
+- `env` values are masked as `***` in the server logs; GitHub masks secrets in the
+  Actions log.
 
-## Логи
+## Logs
 
-- Каждый деплой: `/var/lib/pushbot/logs/<name>/<время>-<sha>.log` (последние 20).
-- Сводка и отклонённые запросы: `journalctl -u pushbot`.
+- Each deploy: `/var/lib/pushbot/logs/<name>/<time>-<sha>.log` (the last 20 are kept).
+- Summary and rejected requests: `journalctl -u pushbot`.
 
-Если job в Actions отменили, деплой всё равно доводится до конца — смотрите лог на
-сервере.
+If the Actions job is cancelled, the deploy still runs to completion — check the log
+on the server.
 
-## Разработка
+## Development
 
 ```sh
 go test -race ./...
 ```
 
-Тесты в `internal/e2e` запускают настоящий `action.sh` (нужны `bash`, `yq`, `jq`,
-`curl`, `tar`). CI дополнительно деплоит через action с настоящими OIDC-токенами
-GitHub. Релиз — тег `vX.Y.Z`: GoReleaser публикует бинарники, а тег `v1` переносится
-на свежий релиз.
+The tests in `internal/e2e` run the real `action.sh` (requires `bash`, `yq`, `jq`,
+`curl`, `tar`). CI also deploys through the action with real GitHub OIDC tokens. To
+release, push a `vX.Y.Z` tag: GoReleaser publishes the binaries and the `v1` tag is
+moved to the new release.
 
-Дизайн: [`docs/superpowers/specs/2026-10-14-pushbot-design.md`](docs/superpowers/specs/2026-10-14-pushbot-design.md).
+Design (in Russian): [`docs/superpowers/specs/2026-10-14-pushbot-design.md`](docs/superpowers/specs/2026-10-14-pushbot-design.md).
