@@ -371,7 +371,7 @@ docker compose не интерполировал `$` внутри них.
 ## 13. Структура кода
 
 ```
-cmd/pushbot/          # main: serve, version
+cmd/pushbot/          # main: serve, version, upgrade (cobra + fang)
 internal/config/      # конфиг демона
 internal/manifest/    # разбор и валидация pushbot.yml
 internal/auth/        # OIDC, allowlist, получение ID владельцев
@@ -380,13 +380,16 @@ internal/state/       # projects.json, owners.json
 internal/runner/      # выполнение шагов: группа процессов, таймаут, окружение, поток
 internal/deploy/      # оркестрация конвейера
 internal/server/      # HTTP-обработчики, потоковая отдача
+internal/metrics/     # метрики Prometheus
+internal/upgrade/     # pushbot upgrade
 action.yml
 install.sh
 packaging/pushbot.service
 .goreleaser.yml
 ```
 
-Зависимости: `gopkg.in/yaml.v3`, `github.com/coreos/go-oidc/v3`.
+Зависимости: `gopkg.in/yaml.v3`, `github.com/coreos/go-oidc/v3`,
+`prometheus/client_golang`, `spf13/cobra`, `charmbracelet/fang`.
 Остальное — стандартная библиотека.
 
 ## 14. Тестирование
@@ -425,7 +428,19 @@ Docker в тестах не нужен: шаги — обычный shell (`echo
 `process_*`. Сервер метрик останавливается после основного, чтобы метрики были
 доступны, пока демон ждёт завершения деплоев.
 
-## 16. Принятые решения
+## 16. CLI и `pushbot upgrade` (добавлено после v1.1.0)
+
+Команды на cobra, помощь и ошибки оформлены charmbracelet/fang: `pushbot serve
+--config <path>`, `pushbot version`, `pushbot upgrade [--version vX.Y.Z]`. Старый флаг
+`-config` (юниты v1.0/v1.1) по-прежнему понимается.
+
+`sudo pushbot upgrade`: берёт последний релиз через API GitHub (или `--version`),
+скачивает `pushbot_linux_<arch>.tar.gz` и `checksums.txt`, сверяет SHA-256, атомарно
+заменяет свой бинарник и `/etc/systemd/system/pushbot.service` (если изменился —
+`daemon-reload`), затем `systemctl restart pushbot`, если сервис запущен; иначе
+подсказывает запустить. Конфиг не трогает. Только Linux, только root.
+
+## 17. Принятые решения
 
 | Вопрос | Решение | Почему |
 |---|---|---|

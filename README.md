@@ -117,8 +117,19 @@ sudo ls -t /var/lib/pushbot/logs/my-service/
 sudo sh -c 'cat "$(ls -t /var/lib/pushbot/logs/my-service/*.log | head -n1)"'
 ```
 
-Upgrade: run the install command again (the config is kept). To install a specific
-version, e.g. to roll back, add `PUSHBOT_VERSION=v1.0.0` next to `PUSHBOT_ALLOW`.
+## Upgrading
+
+```sh
+sudo pushbot upgrade                    # to the latest release
+sudo pushbot upgrade --version v1.0.0   # a specific release, e.g. to roll back
+```
+
+It downloads the release from GitHub, checks its checksum, replaces the binary and
+the systemd unit, and restarts the service (the restart waits for running deploys).
+The config is not touched.
+
+v1.0.0 and v1.1.0 have no `upgrade` command: to upgrade from them, run the install
+command again (the config is kept).
 
 ## Adding a project
 
@@ -162,7 +173,16 @@ jobs:
             DB_PASSWORD=${{ secrets.DB_PASSWORD }}
 ```
 
-In `docker-compose.yml` use `image: ghcr.io/<owner>/<repo>:${IMAGE_TAG}`.
+`env` becomes the `.env` file next to `docker-compose.yml` on the server; compose
+reads it by itself. In the example:
+
+- `IMAGE_TAG` is the tag of the image just built. In `docker-compose.yml` use
+  `image: ghcr.io/<owner>/<repo>:${IMAGE_TAG}`, and the server runs exactly this commit.
+- `DB_PASSWORD` is an example secret: add it to the repository under Settings → Secrets
+  and variables → Actions (or to the `production` environment) and use it in compose
+  as `${DB_PASSWORD}`.
+
+List the variables your compose file needs; if it needs none, drop `env`.
 
 **3. Push.** The project appears in `/srv/apps/<repository name>`.
 

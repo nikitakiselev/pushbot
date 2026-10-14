@@ -116,9 +116,19 @@ sudo ls -t /var/lib/pushbot/logs/my-service/
 sudo sh -c 'cat "$(ls -t /var/lib/pushbot/logs/my-service/*.log | head -n1)"'
 ```
 
-Обновление: запустите команду установки ещё раз (конфиг сохранится). Чтобы
-поставить конкретную версию, например для отката, добавьте `PUSHBOT_VERSION=v1.0.0`
-рядом с `PUSHBOT_ALLOW`.
+## Обновление
+
+```sh
+sudo pushbot upgrade                    # до последнего релиза
+sudo pushbot upgrade --version v1.0.0   # конкретный релиз, например для отката
+```
+
+Команда скачивает релиз с GitHub, проверяет контрольную сумму, заменяет бинарник и
+systemd-юнит и перезапускает сервис (перезапуск дожидается текущих деплоев). Конфиг
+не трогается.
+
+В v1.0.0 и v1.1.0 команды `upgrade` нет: чтобы обновиться с них, запустите команду
+установки ещё раз (конфиг сохранится).
 
 ## Подключение проекта
 
@@ -162,7 +172,17 @@ jobs:
             DB_PASSWORD=${{ secrets.DB_PASSWORD }}
 ```
 
-В `docker-compose.yml` укажите `image: ghcr.io/<owner>/<repo>:${IMAGE_TAG}`.
+`env` превращается в файл `.env` рядом с `docker-compose.yml` на сервере; compose
+читает его сам. В примере:
+
+- `IMAGE_TAG` — тег только что собранного образа. В `docker-compose.yml` укажите
+  `image: ghcr.io/<owner>/<repo>:${IMAGE_TAG}`, и сервер запустит образ именно этого
+  коммита.
+- `DB_PASSWORD` — пример секрета: добавьте его в репозитории в Settings → Secrets and
+  variables → Actions (или в окружение `production`) и используйте в compose как
+  `${DB_PASSWORD}`.
+
+Перечислите переменные, которые нужны вашему compose; если не нужны — уберите `env`.
 
 **3. Push.** Проект появится в `/srv/apps/<имя репозитория>`.
 
