@@ -9,7 +9,7 @@ User=pushbot
 Group=pushbot
 SupplementaryGroups=docker
 Environment=HOME=/var/lib/pushbot
-ExecStart=/usr/local/bin/pushbot serve -config /etc/pushbot/config.yml
+ExecStart=/usr/local/bin/pushbot serve --config /etc/pushbot/config.yml
 Restart=on-failure
 RestartSec=5
 # SIGTERM goes to pushbot only; it stops accepting deploys and waits for running

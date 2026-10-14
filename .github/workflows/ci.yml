@@ -47,7 +47,7 @@ jobs:
           allow:
             - ${{ github.repository }}
           CONFIG
-          "$RUNNER_TEMP/pushbot" serve -config "$RUNNER_TEMP/pb/config.yml" >"$RUNNER_TEMP/pb/daemon.log" 2>&1 &
+          "$RUNNER_TEMP/pushbot" serve --config "$RUNNER_TEMP/pb/config.yml" >"$RUNNER_TEMP/pb/daemon.log" 2>&1 &
           for i in $(seq 1 60); do
             curl -sf http://127.0.0.1:9800/healthz && exit 0
             sleep 1
