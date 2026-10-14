@@ -8,9 +8,13 @@
 
 ```mermaid
 flowchart LR
-    A[git push] --> B[GitHub Actions]
-    B -->|HTTP| C[pushbot на сервере]
-    C --> D[обновлённое приложение]
+    A[git push] --> B["GitHub Actions<br/>собирает образ"]
+    B -->|HTTP| P
+    subgraph P["pushbot на сервере: выполняет pushbot.yml"]
+        direction TB
+        D["кладёт файлы проекта<br/>docker-compose.yml и др."] --> E["пишет .env<br/>из GitHub Secrets"]
+        E --> F["запускает команды<br/>docker compose pull<br/>docker compose up -d"]
+    end
 ```
 
 ## Установка на сервер
