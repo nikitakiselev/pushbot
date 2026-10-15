@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -79,12 +78,16 @@ func Run(ctx context.Context, o Options, report func(Result)) int {
 	}
 
 	cfg, err := config.Load(o.ConfigPath)
-	if err != nil {
+	noConfig := errors.Is(err, os.ErrNotExist)
+	switch {
+	case noConfig:
+		add(Result{Fail, "config " + o.ConfigPath + " does not exist", "sudo pushbot init"})
+	case err != nil:
 		add(Result{Fail, "config: " + err.Error(), "fix the file, then: sudo systemctl restart pushbot"})
-	} else {
+	default:
 		add(Result{OK, "config " + o.ConfigPath + " is valid", ""})
 	}
-	service, running := checkService(o)
+	service, running := checkService(o, noConfig)
 	add(service)
 	// A stopped service would fail these too; its line already says what to do.
 	if running && cfg != nil {
@@ -116,8 +119,9 @@ func Run(ctx context.Context, o Options, report func(Result)) int {
 	return failures
 }
 
-// checkService also reports whether the service is running.
-func checkService(o Options) (Result, bool) {
+// checkService also reports whether the service is running. Without a config
+// there is nothing to start: pushbot init writes one and starts the service.
+func checkService(o Options, noConfig bool) (Result, bool) {
 	enabled, err := o.Systemctl("is-enabled", "pushbot")
 	if errors.Is(err, exec.ErrNotFound) {
 		return Result{Fail, "systemctl not found: pushbot runs as a systemd service", ""}, false
@@ -131,6 +135,8 @@ func checkService(o Options) (Result, bool) {
 		return Result{OK, "service pushbot is active and enabled", ""}, true
 	case active == "active":
 		return Result{Warn, "service pushbot is " + enabled + " and will not start after a reboot", "sudo systemctl enable pushbot"}, true
+	case active == "inactive" && noConfig:
+		return Result{Fail, "service pushbot is not running", "sudo pushbot init"}, false
 	case active == "inactive":
 		return Result{Fail, "service pushbot is not running", "sudo systemctl start pushbot"}, false
 	default:
@@ -139,7 +145,7 @@ func checkService(o Options) (Result, bool) {
 }
 
 func checkDaemon(ctx context.Context, o Options, listen string) Result {
-	body, err := get(ctx, o.Client, "http://"+localAddr(listen)+"/healthz")
+	body, err := get(ctx, o.Client, "http://"+config.DialAddr(listen)+"/healthz")
 	if err == nil && strings.TrimSpace(body) != "ok" {
 		err = fmt.Errorf("unexpected response %q", body)
 	}
@@ -150,7 +156,7 @@ func checkDaemon(ctx context.Context, o Options, listen string) Result {
 }
 
 func checkMetrics(ctx context.Context, o Options, listen string) Result {
-	if _, err := get(ctx, o.Client, "http://"+localAddr(listen)+"/metrics"); err != nil {
+	if _, err := get(ctx, o.Client, "http://"+config.DialAddr(listen)+"/metrics"); err != nil {
 		return Result{Fail, "metrics on " + listen + " do not answer: " + err.Error(), "see the log: sudo journalctl -u pushbot -n 50"}
 	}
 	return Result{OK, "metrics on " + listen + " answer /metrics", ""}
@@ -170,19 +176,6 @@ func checkURL(ctx context.Context, o Options) Result {
 		return Result{Fail, u + ": " + err.Error(), "check the reverse proxy, see \"Reverse proxy\" in the README"}
 	}
 	return Result{OK, u + " answers through the proxy", ""}
-}
-
-// localAddr turns a listen address into one to connect to: ":9800" and
-// "0.0.0.0:9800" become "127.0.0.1:9800".
-func localAddr(listen string) string {
-	host, port, err := net.SplitHostPort(listen)
-	if err != nil {
-		return listen
-	}
-	if ip := net.ParseIP(host); host == "" || (ip != nil && ip.IsUnspecified()) {
-		host = "127.0.0.1"
-	}
-	return net.JoinHostPort(host, port)
 }
 
 func checkDocker(o Options) Result {

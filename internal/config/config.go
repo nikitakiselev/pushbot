@@ -38,7 +38,9 @@ type AllowRule struct {
 	RepoGlob string
 }
 
-type rawConfig struct {
+// File is the config as written. An empty string (nil LogRetention) means the
+// key is absent and its default applies.
+type File struct {
 	Listen          string   `yaml:"listen"`
 	MetricsListen   string   `yaml:"metrics_listen"`
 	ProjectsRoot    string   `yaml:"projects_root"`
@@ -65,30 +67,44 @@ func Load(file string) (*Config, error) {
 	return c, nil
 }
 
+// Defaults for keys a config may omit. DefaultProjectsRoot is what pushbot init
+// suggests: projects_root itself is required.
+const (
+	DefaultListen          = "127.0.0.1:9800"
+	DefaultProjectsRoot    = "/srv/apps"
+	defaultStateDir        = "/var/lib/pushbot"
+	defaultAudience        = "pushbot"
+	defaultDeployTimeout   = "15m"
+	defaultMaxBundleSize   = "50MB"
+	defaultMaxUnpackedSize = "200MB"
+	defaultLogRetention    = 20
+)
+
 // Parse decodes config YAML, applies defaults and validates the result.
 func Parse(data []byte) (*Config, error) {
-	var raw rawConfig
-	dec := yaml.NewDecoder(bytes.NewReader(data))
-	dec.KnownFields(true)
-	if err := dec.Decode(&raw); err != nil {
+	raw, err := decode(data)
+	if err != nil {
 		return nil, err
 	}
 
 	c := &Config{
-		Listen:        or(raw.Listen, "127.0.0.1:9800"),
+		Listen:        or(raw.Listen, DefaultListen),
 		MetricsListen: raw.MetricsListen,
 		ProjectsRoot:  raw.ProjectsRoot,
-		StateDir:      or(raw.StateDir, "/var/lib/pushbot"),
-		Audience:      or(raw.Audience, "pushbot"),
+		StateDir:      or(raw.StateDir, defaultStateDir),
+		Audience:      or(raw.Audience, defaultAudience),
 		OIDCIssuer:    or(raw.OIDCIssuer, "https://token.actions.githubusercontent.com"),
-		LogRetention:  20,
+		LogRetention:  defaultLogRetention,
 	}
 	if c.ProjectsRoot == "" || !filepath.IsAbs(c.ProjectsRoot) {
 		return nil, errors.New("projects_root must be an absolute path")
 	}
+	if err := ValidateAddress(c.Listen); err != nil {
+		return nil, fmt.Errorf("listen: %w", err)
+	}
 	if c.MetricsListen != "" {
-		if _, port, err := net.SplitHostPort(c.MetricsListen); err != nil || port == "" {
-			return nil, fmt.Errorf("metrics_listen: expected host:port, got %q", c.MetricsListen)
+		if err := ValidateAddress(c.MetricsListen); err != nil {
+			return nil, fmt.Errorf("metrics_listen: %w", err)
 		}
 	}
 	if !filepath.IsAbs(c.StateDir) {
@@ -101,14 +117,13 @@ func Parse(data []byte) (*Config, error) {
 		c.LogRetention = *raw.LogRetention
 	}
 
-	var err error
-	if c.DeployTimeout, err = time.ParseDuration(or(raw.DeployTimeout, "15m")); err != nil {
+	if c.DeployTimeout, err = time.ParseDuration(or(raw.DeployTimeout, defaultDeployTimeout)); err != nil {
 		return nil, fmt.Errorf("deploy_timeout: %w", err)
 	}
-	if c.MaxBundleSize, err = parseSize(or(raw.MaxBundleSize, "50MB")); err != nil {
+	if c.MaxBundleSize, err = parseSize(or(raw.MaxBundleSize, defaultMaxBundleSize)); err != nil {
 		return nil, fmt.Errorf("max_bundle_size: %w", err)
 	}
-	if c.MaxUnpackedSize, err = parseSize(or(raw.MaxUnpackedSize, "200MB")); err != nil {
+	if c.MaxUnpackedSize, err = parseSize(or(raw.MaxUnpackedSize, defaultMaxUnpackedSize)); err != nil {
 		return nil, fmt.Errorf("max_unpacked_size: %w", err)
 	}
 
@@ -123,6 +138,53 @@ func Parse(data []byte) (*Config, error) {
 		c.Allow = append(c.Allow, rule)
 	}
 	return c, nil
+}
+
+func decode(data []byte) (File, error) {
+	var f File
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	err := dec.Decode(&f)
+	return f, err
+}
+
+// ValidateAllow checks one allow pattern for a new config. It is stricter than
+// Parse, which keeps accepting existing configs: a repository part with a
+// slash or a space never matches a repository name.
+func ValidateAllow(pattern string) error {
+	rule, err := parseAllowRule(pattern)
+	if err != nil {
+		return err
+	}
+	if strings.ContainsAny(rule.RepoGlob, "/ \t") {
+		return fmt.Errorf("%q: the repository part cannot contain a slash or a space; separate patterns", pattern)
+	}
+	return nil
+}
+
+// ValidateAddress checks a listen address: host:port, the host may be empty.
+func ValidateAddress(addr string) error {
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil || port == "" {
+		return fmt.Errorf("expected host:port, got %q", addr)
+	}
+	if _, err := net.LookupPort("tcp", port); err != nil {
+		return fmt.Errorf("%q: invalid port", addr)
+	}
+	return nil
+}
+
+// DialAddr turns a listen address into one to connect to: ":9800" and
+// "0.0.0.0:9800" become "127.0.0.1:9800".
+func DialAddr(listen string) string {
+	host, port, err := net.SplitHostPort(listen)
+	if err != nil {
+		return listen
+	}
+	if ip := net.ParseIP(host); host == "" || (ip != nil && ip.IsUnspecified()) {
+		host = "127.0.0.1"
+	}
+	return net.JoinHostPort(host, port)
 }
 
 func parseAllowRule(s string) (AllowRule, error) {

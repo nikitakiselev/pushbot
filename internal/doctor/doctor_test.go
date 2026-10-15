@@ -322,3 +322,18 @@ func TestBrokenConfig(t *testing.T) {
 	find(t, results, "service pushbot is active")
 	find(t, results, "user pushbot can run docker")
 }
+
+// After install.sh there is no config and the service is not enabled: the fix
+// is pushbot init, not starting a service that has no config.
+func TestMissingConfig(t *testing.T) {
+	s := newSetup(t)
+	os.Remove(s.opts.ConfigPath)
+	s.service = map[string]string{"is-enabled": "disabled", "is-active": "inactive"}
+	s.opts.URL = ""
+	results, _ := s.run(t)
+	for _, text := range []string{"config", "is not running"} {
+		if r := find(t, results, text); r.Status != Fail || r.Hint != "sudo pushbot init" {
+			t.Errorf("%q: got %+v, want a failure with the hint sudo pushbot init", text, r)
+		}
+	}
+}

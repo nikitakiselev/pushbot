@@ -52,26 +52,38 @@ later; on older versions, `/plugin marketplace add nikitakiselev/pushbot`, then
 Requires Linux with systemd and Docker.
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/nikitakiselev/pushbot/main/install.sh \
-  | sudo PUSHBOT_ALLOW='your-github-login/*' sh
+curl -fsSL https://raw.githubusercontent.com/nikitakiselev/pushbot/main/install.sh | sudo sh
+sudo pushbot init
 ```
 
-**`PUSHBOT_ALLOW`** — which GitHub repositories may deploy to this server. The
-format is `owner/repo-pattern`: `your-github-login/*` allows any of your
-repositories (including future ones), `your-github-login/homelab-*` only those with
-that prefix. Without this restriction a token from any repository on GitHub would
-pass: GitHub signs tokens for everyone.
-
-The value goes into `allow` of a new `/etc/pushbot/config.yml`. If the config
-already exists, the variable is ignored. If you omit it, the script creates a config
-with a placeholder and does not start the service until you fill in `allow`
-yourself. The variable sets a single pattern; for more, add them to `allow` in the
-config (see [Daemon config](#daemon-config)).
-
 The script (worth reading, it is short) installs the binary to `/usr/local/bin`,
-creates the `pushbot` user in the `docker` group, the `/srv/apps` and
-`/var/lib/pushbot` directories, the `/etc/pushbot/config.yml` config and a systemd
-service. Running it again upgrades pushbot and leaves the config alone.
+creates the `pushbot` user in the `docker` group, the `/var/lib/pushbot` directory
+and a systemd service. Running it again upgrades pushbot and leaves the config alone.
+
+`pushbot init` asks for the settings, shows the resulting `/etc/pushbot/config.yml`
+and, once you confirm, writes it, starts the service and checks that it answers:
+
+- **Who may deploy** (`allow`): GitHub repositories as `owner/repo-pattern`.
+  `your-github-login/*` allows any of your repositories (including future ones),
+  `your-github-login/homelab-*` only those with that prefix; separate several with
+  commas. Without this restriction a token from any repository on GitHub would
+  pass: GitHub signs tokens for everyone. Each owner is looked up on GitHub right
+  away, so a typo shows up here and not when the service fails to start.
+- **Listen address**, `127.0.0.1:9800` by default: the reverse proxy connects here.
+- **Projects root**, `/srv/apps` by default: one directory per project.
+- **Prometheus metrics address**, empty (off) by default, see [Metrics](#metrics).
+
+For scripts and provisioning, pass the settings as flags and there is no wizard:
+
+```sh
+sudo pushbot init --allow 'your-github-login/*' --allow 'my-org/homelab-*'
+```
+
+The flags are `--allow` (repeat it for more patterns), `--listen`,
+`--projects-root` and `--metrics-listen`. Run again, `pushbot init` starts from the
+existing config: the wizard shows its values, and flags change only the settings
+they name but need `--force` (`--allow` replaces the whole list). The previous
+file is kept as `config.yml.bak`.
 
 ### Reverse proxy
 
@@ -123,9 +135,10 @@ server {
 ```
 
 If the proxy itself runs in a Docker container, `127.0.0.1` inside the container is
-the container, not the server. Either run the proxy with `network_mode: host`, or set
-`listen: 172.17.0.1:9800` in `/etc/pushbot/config.yml` (the host address on the
-`docker0` network, check with `ip addr show docker0`) and proxy to that.
+the container, not the server. Either run the proxy with `network_mode: host`, or
+make pushbot listen on the host address on the `docker0` network (check it with
+`ip addr show docker0`) with `sudo pushbot init --force --listen 172.17.0.1:9800`,
+and proxy to that.
 
 Check: `curl https://pushbot.example.com/healthz` should return `ok`. Or check everything
 at once: `sudo pushbot doctor --url https://pushbot.example.com`.
@@ -135,6 +148,7 @@ at once: `sudo pushbot doctor --url https://pushbot.example.com`.
 ```sh
 sudo pushbot doctor                     # self-check, with a fix for every problem
 sudo systemctl status pushbot           # is it running? shows the last log lines
+sudo pushbot init                       # change the settings, restarts the service
 sudo systemctl restart pushbot          # after editing /etc/pushbot/config.yml
 sudo systemctl stop pushbot             # waits for running deploys (up to 16 min)
 sudo systemctl start pushbot
@@ -378,7 +392,8 @@ environments:
 
 ## Daemon config
 
-`/etc/pushbot/config.yml`; after changes run `systemctl restart pushbot`.
+`/etc/pushbot/config.yml`, written by `pushbot init`. Change it with
+`sudo pushbot init`, or edit it and run `sudo systemctl restart pushbot`.
 
 ```yaml
 listen: 127.0.0.1:9800

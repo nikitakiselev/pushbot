@@ -53,26 +53,41 @@ npx skills add nikitakiselev/pushbot    # Codex, Cursor, Gemini CLI, Claude Code
 Нужны Linux с systemd и Docker.
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/nikitakiselev/pushbot/main/install.sh \
-  | sudo PUSHBOT_ALLOW='your-github-login/*' sh
+curl -fsSL https://raw.githubusercontent.com/nikitakiselev/pushbot/main/install.sh | sudo sh
+sudo pushbot init
 ```
 
-**`PUSHBOT_ALLOW`** — из каких репозиториев GitHub разрешено деплоить на этот
-сервер. Формат `владелец/маска-репозитория`: `your-github-login/*` — любой ваш
-репозиторий (включая будущие), `your-github-login/homelab-*` — только с таким
-префиксом. Без этого ограничения прошёл бы токен любого репозитория на GitHub:
-GitHub подписывает токены для всех.
-
-Значение записывается в `allow` нового `/etc/pushbot/config.yml`. Если конфиг уже
-есть, переменная игнорируется. Если её не передать, скрипт создаст конфиг с
-заглушкой и не запустит сервис, пока вы не впишете `allow` сами. Через переменную
-задаётся один шаблон; если нужно несколько, допишите их в `allow` в конфиге
-(см. [Конфиг демона](#конфиг-демона)).
-
 Скрипт (его стоит прочитать, он короткий) ставит бинарник в `/usr/local/bin`,
-создаёт пользователя `pushbot` в группе `docker`, директории `/srv/apps` и
-`/var/lib/pushbot`, конфиг `/etc/pushbot/config.yml` и systemd-сервис. Повторный
-запуск обновляет pushbot и не трогает конфиг.
+создаёт пользователя `pushbot` в группе `docker`, директорию `/var/lib/pushbot` и
+systemd-сервис. Повторный запуск обновляет pushbot и не трогает конфиг.
+
+`pushbot init` спрашивает настройки, показывает получившийся
+`/etc/pushbot/config.yml` и после подтверждения записывает его, запускает сервис и
+проверяет, что тот отвечает:
+
+- **Кто может деплоить** (`allow`): репозитории GitHub в формате
+  `владелец/маска-репозитория`. `your-github-login/*` — любой ваш репозиторий
+  (включая будущие), `your-github-login/homelab-*` — только с таким префиксом;
+  несколько шаблонов перечисляются через запятую. Без этого ограничения прошёл бы
+  токен любого репозитория на GitHub: GitHub подписывает токены для всех. Каждый
+  владелец сразу ищется на GitHub, так что опечатка видна здесь, а не тогда, когда
+  сервис не сможет запуститься.
+- **Адрес демона**, по умолчанию `127.0.0.1:9800`: сюда подключается reverse proxy.
+- **Директория проектов**, по умолчанию `/srv/apps`: по одной поддиректории на проект.
+- **Адрес метрик Prometheus**, по умолчанию пусто (выключены), см. [Метрики](#метрики).
+
+Для скриптов и автоматической настройки передайте настройки флагами, тогда мастера
+не будет:
+
+```sh
+sudo pushbot init --allow 'your-github-login/*' --allow 'my-org/homelab-*'
+```
+
+Флаги: `--allow` (повторите для нескольких шаблонов), `--listen`,
+`--projects-root` и `--metrics-listen`. При повторном запуске `pushbot init`
+отталкивается от существующего конфига: мастер показывает его значения, а флаги
+меняют только названные настройки, но требуют `--force` (`--allow` заменяет весь
+список). Предыдущий файл сохраняется как `config.yml.bak`.
 
 ### Reverse proxy
 
@@ -124,8 +139,9 @@ server {
 
 Если прокси сам работает в Docker-контейнере, `127.0.0.1` внутри контейнера — это
 сам контейнер, а не сервер. Тогда либо запустите прокси с `network_mode: host`, либо
-укажите в `/etc/pushbot/config.yml` `listen: 172.17.0.1:9800` (адрес хоста в сети
-`docker0`, проверьте `ip addr show docker0`) и проксируйте на него.
+переключите pushbot на адрес хоста в сети `docker0` (проверьте его
+`ip addr show docker0`) командой `sudo pushbot init --force --listen 172.17.0.1:9800`
+и проксируйте на него.
 
 Проверка: `curl https://pushbot.example.com/healthz` должен вернуть `ok`. Или проверить
 всё сразу: `sudo pushbot doctor --url https://pushbot.example.com`.
@@ -135,6 +151,7 @@ server {
 ```sh
 sudo pushbot doctor                     # самопроверка, к каждой проблеме — как исправить
 sudo systemctl status pushbot           # запущен ли; последние строки лога
+sudo pushbot init                       # поменять настройки, перезапускает сервис
 sudo systemctl restart pushbot          # после правки /etc/pushbot/config.yml
 sudo systemctl stop pushbot             # ждёт завершения текущих деплоев (до 16 минут)
 sudo systemctl start pushbot
@@ -379,7 +396,8 @@ environments:
 
 ## Конфиг демона
 
-`/etc/pushbot/config.yml`, после изменений — `systemctl restart pushbot`.
+`/etc/pushbot/config.yml`, его пишет `pushbot init`. Поменять настройки можно через
+`sudo pushbot init` или правкой файла с последующим `sudo systemctl restart pushbot`.
 
 ```yaml
 listen: 127.0.0.1:9800

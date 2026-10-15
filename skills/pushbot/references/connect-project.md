@@ -22,7 +22,7 @@ hotspot, before suspecting the server.
 
 Ask the user whether the repository's owner is in the server's `allow` list
 (`/etc/pushbot/config.yml`). If it is not, the first deploy fails with 403. Adding
-it is one line on the server, see [install-server.md](install-server.md#maintenance).
+it is one command on the server, see [install-server.md](install-server.md#maintenance).
 
 ## 2. Look at the project before changing anything
 

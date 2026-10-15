@@ -79,6 +79,7 @@ func TestParseErrors(t *testing.T) {
 		"zero retention":     "projects_root: /srv\nallow: [a/*]\nlog_retention: 0",
 		"relative state dir": "projects_root: /srv\nallow: [a/*]\nstate_dir: state",
 		"bad metrics_listen": "projects_root: /srv\nallow: [a/*]\nmetrics_listen: 9801",
+		"bad listen":         "projects_root: /srv\nallow: [a/*]\nlisten: 9800",
 	}
 	for name, doc := range cases {
 		t.Run(name, func(t *testing.T) {
