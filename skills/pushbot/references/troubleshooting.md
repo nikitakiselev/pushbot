@@ -24,7 +24,7 @@ gh run view <run-id> --log-failed
 
 ```sh
 sudo journalctl -u pushbot --since "1 hour ago"   # rejected requests with the reason and repository
-sudo ls -t /var/lib/pushbot/logs/<name>/          # deploy logs, newest first; secrets are masked
+sudo ls -t /var/lib/pushbot/logs/<name>/          # deploy logs, newest first; env and secret values of 4+ characters are masked
 sudo pushbot doctor --url https://pushbot.example.com
 ```
 
@@ -34,9 +34,16 @@ sudo pushbot doctor --url https://pushbot.example.com
 |---|---|---|
 | `no OIDC token available: add 'permissions: id-token: write' ...` | The job has no `id-token: write`. A job-level `permissions:` block replaces the workflow-level one. Pull requests from forks never get tokens. | Add `id-token: write` to the job (or workflow) permissions. A `permissions:` block sets everything it does not list to `none`, so list the rest too: `contents: read`, `packages: write`. |
 | `pushbot.yml not found` | No `actions/checkout` before the step, or the manifest is elsewhere. | Add `actions/checkout`, or set the `config` input to the manifest's path. |
-| `yq is required on the runner` (or `jq`, `curl`, `tar`) | A self-hosted runner or job container without these tools. | Install them, or run the job on `ubuntu-latest`. |
+| `yq is required on the runner` (or `jq`, `curl`, `tar`, `base64`) | A self-hosted runner or job container without these tools. | Install them, or run the job on `ubuntu-latest`. |
 | `tar: <path>: Cannot stat: No such file or directory` | A `files` entry does not exist in the checkout: a typo, a gitignored or generated file. | Fix the path, or generate the file in an earlier step. |
 | `cannot get an OIDC token from GitHub` | GitHub's token service failed. | Re-run the job. |
+| `env.file <path> not found` | The `env.file` from `pushbot.yml` does not exist in the checkout. | Fix the path or commit the file. |
+| `env.secrets is set in pushbot.yml: add secrets: ${{ toJSON(secrets) }} to the pushbot step` | The step has no `secrets` input. | Add it as shown. |
+| `secret <NAME> is not set in GitHub ...: gh secret set <NAME> ...` | A secret from `env.secrets` does not exist for this job. Environment secrets reach only jobs with that `environment:`; a job without one sees repository secrets only. | If the job should run in an environment, add `environment:` to it. Otherwise the user runs the command shown. |
+| `environment "<x>" is not listed in environments of pushbot.yml (...)` | `pushbot.yml` has `environments`, and the job's `environment:` is not among them (names compare case-insensitively). | Fix `environment:` in the workflow, or add `<x>: {}` to `environments`. |
+| `pushbot.yml lists environments, but the job has no environment: ...` | `pushbot.yml` has `environments`, the job has no `environment:`. | Add `environment: <name>` to the job. |
+| `pushbot.yml: <key> must be a map` / `must be a list`, `pushbot.yml: env.secrets: invalid name ...`, `cannot parse pushbot.yml` | The action reads `files`, `env` and `environments` itself, before the server checks the rest. | Fix `pushbot.yml` (see [connect-project.md](connect-project.md#4-write-pushbotyml)). |
+| `the server is too old for env.secrets: run sudo pushbot upgrade on it` | The daemon predates `env.secrets` and answered `unknown field "secrets"`. | On the server: `sudo pushbot upgrade`. |
 
 ## Connection errors
 
@@ -72,7 +79,12 @@ before:
 | 401 | `unauthorized: failed to verify signature: ...` | The server cannot fetch GitHub's OIDC keys (DNS, outbound HTTPS). | Run `sudo pushbot doctor`; fix outbound access to `token.actions.githubusercontent.com`. |
 | 401 | `unauthorized: token already used` | The same token arrived twice, usually a proxy retrying the request. | Re-run the job; turn off retries to pushbot in the proxy. |
 | 401 | `missing bearer token` | The proxy strips the `Authorization` header, or the request did not come from the action. | Pass `Authorization` through the proxy. |
-| 400 | `pushbot.yml: ...` (with a line number) | Invalid manifest: an unknown key, a bad `files` entry, an empty `run`, empty `steps`. | Fix it; the keys are `name`, `files`, `steps` only (see [connect-project.md](connect-project.md#4-write-pushbotyml)). |
+| 400 | `pushbot.yml: ...` (with a line number) | Invalid manifest: an unknown key, a bad `files` or `env` entry, an empty `run`, empty `steps`, `steps` under `environments`. | Fix it; the keys are `name`, `files`, `env`, `steps`, `environments` (see [connect-project.md](connect-project.md#4-write-pushbotyml)). On an older server the new keys are unknown: `sudo pushbot upgrade`. |
+| 400 | `bad request: <KEY>: the value is wrapped in double quotes ...` | A value in `env` or a secret was written dotenv-style, `"..."`. | Remove the quotes, or move the variable to `env.file`. |
+| 400 | `bad request: <KEY>: ${<OTHER>} is not expanded in env and secrets ...` | An `env` value or a secret refers to another variable. | Move `<KEY>` to `env.file`, where `${...}` works. |
+| 400 | `bad request: <KEY> is set both in <a> and in <b>; keep one` | The same variable comes from two of `env`, the secrets and `env.file`. | Remove it from one. |
+| 400 | `bad request: <file> line N: ...`, `bad request: env.file <file>: ...` | `env.file` has a line that is not `KEY=VALUE`, a duplicate key or an unclosed quote; or it is missing from the bundle or over 64 KB. | Fix the file. |
+| 400 | `bad request: secret <NAME> is declared in pushbot.yml but was not sent` | The pushbot step has no `secrets` input that reached the server. | Pass `secrets: ${{ toJSON(secrets) }}`. |
 | 400 | `env line N: expected KEY=VALUE` | A line of `env` without `=`, often from a multi-line secret (N counts lines after secrets are substituted). | One `KEY=VALUE` per line; store multi-line values base64-encoded. |
 | 400 | `env line N: invalid key ...`, `... values containing ' are not supported`, `duplicate key ...` | As it says. | Keys match `[A-Za-z_][A-Za-z0-9_]*`; no `'` in values; each key once. |
 | 400 | `bad request: invalid project name ...; set name in pushbot.yml` | The repository name is not a valid project name. | Set `name:` matching `^[a-z0-9][a-z0-9._-]{0,62}$`. |
@@ -99,7 +111,7 @@ Common causes:
 | `invalid reference format` | `IMAGE_TAG` is missing from `env`, so the image becomes `ghcr.io/<owner>/<repo>:`; or the name has capitals (`repository name must be lowercase`). | Add `IMAGE_TAG=${{ github.sha }}` to `env`; write the image name in lower case. |
 | `manifest unknown`, `not found` | The image or tag was never pushed: the name in the compose file differs from the one built (owner, repository, suffix). | Make the names match. |
 | `no matching manifest for linux/arm64` (or `amd64`); `exec format error` in container logs | The image was built for another CPU architecture. | Build on `ubuntu-24.04-arm` for arm64 servers, or build multi-platform (see [connect-project.md](connect-project.md#5-write-the-workflow)). |
-| `variable is not set. Defaulting to a blank string` | A variable used in the compose file is missing from `env`. | Add it to `env`. |
+| `variable is not set. Defaulting to a blank string` | A variable used in the compose file is missing from `.env`. | Add it to `env`, `env.secrets` or `env.file`. |
 | `no configuration file provided: not found` | No compose file in the project directory under a default name. | List it in `files`, mapped to `compose.yml` if it has another name. |
 | `port is already allocated`, `address already in use` | Another project or service uses the host port. | Pick a free port in the compose file. |
 | `not a directory`, `Are you trying to mount a directory onto a file` | A bind-mounted file is not in `files`, so Docker created a directory in its place. | Add the file to `files`. Before the next deploy, remove the empty directory Docker created (`sudo rmdir /srv/apps/<name>/<file>`), or the copy fails with `is a directory`. |
@@ -126,7 +138,7 @@ On the server (`/srv/apps` is readable only by root and `pushbot`, hence `sudo s
 
 ```sh
 sudo sh -c 'cd /srv/apps/<name> && docker compose ps && docker compose logs --tail 100'
-sudo cut -d= -f1 /srv/apps/<name>/.env   # which variables were written, without their values
+sudo grep -v '^#' /srv/apps/<name>/.env | cut -d= -f1   # which variables were written, without their values
 ```
 
 If a variable is in `.env` but the application does not see it, the compose file

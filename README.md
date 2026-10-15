@@ -175,6 +175,8 @@ Nothing to do on the server. In the project repository:
 # pushbot.yml
 files:
   - docker-compose.yml
+env:
+  secrets: [DB_PASSWORD]
 ```
 
 **2. A step in the workflow:**
@@ -203,23 +205,25 @@ jobs:
       - uses: nikitakiselev/pushbot@v1
         with:
           url: https://pushbot.example.com
+          secrets: ${{ toJSON(secrets) }}
           env: |
             IMAGE_TAG=${{ github.sha }}
-            DB_PASSWORD=${{ secrets.DB_PASSWORD }}
 ```
 
-`env` becomes the `.env` file next to `docker-compose.yml` on the server; compose
+This becomes the `.env` file next to `docker-compose.yml` on the server; compose
 reads it by itself. In the example:
 
 - `IMAGE_TAG` is the tag of the image just built. In `docker-compose.yml` use
   `image: ghcr.io/<owner>/<repo>:${IMAGE_TAG}`, and the server runs exactly this commit.
   GHCR needs lower-case names: if the owner or repository name has capitals, write
   the image name out in lower case here and in `tags`.
-- `DB_PASSWORD` is an example secret: add it to the repository under Settings → Secrets
-  and variables → Actions (or to the `production` environment) and use it in compose
-  as `${DB_PASSWORD}`.
+- `DB_PASSWORD` is a secret: set it once with `gh secret set DB_PASSWORD --env production`
+  (or under Settings → Environments → production) and use it in compose as
+  `${DB_PASSWORD}`. The action sends the server only the secrets listed in
+  `env.secrets`.
 
-List the variables your compose file needs; if it needs none, drop `env`.
+Non-secret settings are easier to keep as a file in the repository, see
+[Environment variables](#environment-variables).
 
 **3. Push.** The project appears in `/srv/apps/<repository name>`.
 
@@ -235,9 +239,20 @@ files:                    # what to put into /srv/apps/<name>
   - deploy/compose.prod.yml: compose.yml     # renamed
   - deploy/: .                               # directory contents into the project root
 
+env:                      # optional; see "Environment variables"
+  file: deploy/production.env                # non-secret settings, as is
+  secrets: [APP_KEY, DB_PASSWORD]            # GitHub secret names
+
 steps:                    # optional; defaults to:
   - run: docker compose pull
   - run: docker compose up -d --remove-orphans
+
+environments:             # optional; see "Environments"
+  production: {}
+  staging:
+    name: my-service-staging
+    env:
+      file: deploy/staging.env
 ```
 
 Deploy order: files from `files` → `.env` → steps, one by one.
@@ -245,22 +260,118 @@ Deploy order: files from `files` → `.env` → steps, one by one.
 - **Files** are overwritten, but **nothing is deleted**: container data in the
   project directory (`./data` etc.) is safe. Paths are relative, without `..`;
   symlinks are not supported.
-- **`.env`** is fully rewritten from the `env` input (mode `0600`, values in single
-  quotes so compose does not expand `$`). `.env` cannot be listed in `files`.
+- **`.env`** is fully rewritten on every deploy (mode `0600`), see
+  [Environment variables](#environment-variables). `.env` cannot be listed in `files`.
 - **Steps** run as `sh -e -c '<run>'` in the project directory; the first error stops
-  the deploy. The environment contains the `env` variables plus `PUSHBOT_PROJECT`,
-  `PUSHBOT_REPOSITORY`, `PUSHBOT_SHA`, `PUSHBOT_REF`, `PUSHBOT_ACTOR`,
-  `PUSHBOT_RUN_ID`, `PUSHBOT_RUN_URL`. The daemon's environment is not inherited.
+  the deploy. The environment contains the variables from the `env` input and secrets
+  plus `PUSHBOT_PROJECT`, `PUSHBOT_ENVIRONMENT`, `PUSHBOT_REPOSITORY`, `PUSHBOT_SHA`,
+  `PUSHBOT_REF`, `PUSHBOT_ACTOR`, `PUSHBOT_RUN_ID`, `PUSHBOT_RUN_URL`. The daemon's
+  environment is not inherited.
 
 There is no automatic rollback: to roll back, re-run the workflow for the previous
 commit.
+
+## Environment variables
+
+`.env` is built from three sources:
+
+| Source | Where it is set | What goes there |
+|---|---|---|
+| A file in the repository | `env.file` in `pushbot.yml` | non-secret settings |
+| GitHub secrets | names in `env.secrets` in `pushbot.yml`, values in GitHub Secrets | passwords, keys, tokens |
+| The action's `env` input | `env:` of the workflow step | values computed in CI, such as `IMAGE_TAG` |
+
+```yaml
+# pushbot.yml
+env:
+  file: deploy/production.env
+  secrets: [APP_KEY, DB_PASSWORD]
+```
+
+```sh
+gh secret set APP_KEY --env production
+gh secret set DB_PASSWORD --env production
+```
+
+On the server this becomes:
+
+```
+# pushbot: env input
+IMAGE_TAG='a1b2c3d…'
+# pushbot: secrets
+APP_KEY='base64:…'
+DB_PASSWORD='…'
+# pushbot: deploy/production.env
+APP_NAME="My Service"
+DATABASE_URL="mysql://app:${DB_PASSWORD}@db/app"
+```
+
+- **The file** goes into `.env` as is: quotes, `${…}` and comments are handled by
+  compose and the application, just like locally. It comes last, so it can refer to
+  secrets and `env`. Keep secrets out of it: its values are not masked in logs.
+- **Secrets and `env`** are taken literally and written in single quotes so compose
+  does not expand `$`; nothing needs escaping. Values with `'` or line breaks are not
+  supported. A value wrapped in double quotes, or `${KEY}` with a key from any source,
+  is an error: that is copied dotenv syntax, move such a variable to the file. pushbot
+  warns about `$$` in the log: it stays `$$`.
+- **One key, one source**: a key set in two sources is an error before the deploy.
+- Secrets are looked up case-insensitively, like GitHub does. The action gets all
+  secrets of the job (`toJSON(secrets)`) but sends the server only those listed in
+  `env.secrets`; if one is missing in GitHub, the action fails before the request.
+- Steps get the variables from secrets and `env` in their environment. Variables from
+  the file reach them only through `.env`: compose reads it by itself, a shell step
+  can use `set -a; . ./.env; set +a`.
+
+Keep one GitHub secret per variable rather than the whole `.env` in one secret: a
+secret cannot be read back, so changing one line would need the whole file.
+
+Your own scripts on the server (backups and the like) should read `.env` through the
+shell rather than `grep | cut`, which returns the value with its quotes:
+
+```sh
+DB_PASSWORD="$(. /srv/apps/my-service/.env && printf '%s' "$DB_PASSWORD")"
+```
+
+This works as long as the file from the repository is valid `sh` too.
+
+## Environments
+
+One `pushbot.yml` can describe several GitHub environments (`environment:` of the
+job), such as staging and production:
+
+```yaml
+name: my-service
+files: [docker-compose.yml]
+env:
+  file: deploy/production.env
+  secrets: [APP_KEY, DB_PASSWORD]
+
+environments:
+  production: {}
+  staging:
+    name: my-service-staging
+    env:
+      file: deploy/staging.env
+```
+
+- pushbot takes the environment from the job's OIDC token; no extra input is needed.
+- An environment can override `name`, `files`, `env.file` and `env.secrets`; a key
+  replaces the top-level value as a whole. Steps are shared by all environments, so
+  staging tests the same deploy as production; if a step must behave differently,
+  check `$PUSHBOT_ENVIRONMENT` in it.
+- If `environments` is set, the job's environment must be listed (`production: {}` is
+  an environment without overrides), otherwise the deploy is rejected.
+- Secret values per environment live in GitHub Environments under the same names:
+  `gh secret set DB_PASSWORD --env staging`.
+- Environments on the same server need different `name`s.
 
 ## Action inputs
 
 | Input | Default | |
 |---|---|---|
 | `url` | — | pushbot address, required |
-| `env` | empty | `KEY=VALUE` lines for `.env` |
+| `env` | empty | `KEY=VALUE` lines for `.env`, values taken as is |
+| `secrets` | empty | `${{ toJSON(secrets) }}` when `pushbot.yml` has `env.secrets` |
 | `config` | `pushbot.yml` | manifest path relative to the repository root |
 | `registry-auth` | `true` | send the temporary `github.token` so the server can pull a private image from ghcr.io |
 | `audience` | `pushbot` | OIDC token audience |
@@ -301,8 +412,9 @@ limit).
 - The first deploy binds the project name to the repository (by `repository_id`);
   another repository with the same `name` gets 403. To release a name, remove its
   entry from `/var/lib/pushbot/projects.json`.
-- `env` values are masked as `***` in the server logs; GitHub masks secrets in the
-  Actions log.
+- `env` and secret values of 4 characters or more are masked as `***` in the server
+  logs (shorter ones such as `1` or `on` would garble them); values from the env file
+  are not masked. GitHub masks secrets in the Actions log.
 
 ## Logs
 

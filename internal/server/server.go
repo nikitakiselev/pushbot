@@ -3,6 +3,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -20,7 +21,7 @@ import (
 )
 
 const (
-	maxTextPart = 64 << 10 // manifest, env
+	maxTextPart = 64 << 10 // manifest, env, secrets
 	maxCredPart = 4 << 10  // registry_user, registry_token
 	// formOverhead allows for multipart framing and the text parts on top of the bundle.
 	formOverhead = 1 << 20
@@ -152,7 +153,7 @@ func (s *Server) prepare(w http.ResponseWriter, r *http.Request) (*deploy.Job, *
 	}
 
 	job, err := s.deployer.Prepare(deploy.Request{
-		Claims: claims, Manifest: m, Env: vars, BundlePath: f.bundlePath, Registry: registry,
+		Claims: claims, Manifest: m, Env: vars, Secrets: f.secrets, BundlePath: f.bundlePath, Registry: registry,
 	})
 	switch {
 	case errors.Is(err, deploy.ErrBadRequest):
@@ -169,6 +170,7 @@ func (s *Server) prepare(w http.ResponseWriter, r *http.Request) (*deploy.Job, *
 type form struct {
 	manifest      []byte
 	env           string
+	secrets       map[string]string // nil when the field was not sent
 	registryUser  string
 	registryToken string
 	bundlePath    string
@@ -210,6 +212,15 @@ func (s *Server) readPart(f *form, part *multipart.Part) *httpError {
 		data, herr := readLimited(part, name, maxTextPart)
 		f.env = string(data)
 		return herr
+	case "secrets":
+		data, herr := readLimited(part, name, maxTextPart)
+		if herr != nil {
+			return herr
+		}
+		if err := json.Unmarshal(data, &f.secrets); err != nil {
+			return fail(http.StatusBadRequest, "secrets: expected a JSON object of strings: %v", err)
+		}
+		return nil
 	case "registry_user", "registry_token":
 		data, herr := readLimited(part, name, maxCredPart)
 		if name == "registry_user" {

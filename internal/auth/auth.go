@@ -34,6 +34,7 @@ type Claims struct {
 	SHA               string
 	Actor             string
 	RunID             string
+	Environment       string // the job's environment; "" when it has none
 	JTI               string
 	Expiry            time.Time
 }
@@ -74,6 +75,7 @@ type rawClaims struct {
 	SHA               string     `json:"sha"`
 	Actor             string     `json:"actor"`
 	RunID             flexString `json:"run_id"`
+	Environment       string     `json:"environment"`
 	JTI               string     `json:"jti"`
 }
 
@@ -96,6 +98,7 @@ func (v *Verifier) Verify(ctx context.Context, rawToken string) (*Claims, error)
 		SHA:               raw.SHA,
 		Actor:             raw.Actor,
 		RunID:             string(raw.RunID),
+		Environment:       raw.Environment,
 		JTI:               raw.JTI,
 		Expiry:            tok.Expiry,
 	}

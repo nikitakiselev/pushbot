@@ -8,6 +8,7 @@ import (
 	"io"
 	"path"
 	"regexp"
+	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -18,7 +19,26 @@ type Manifest struct {
 	// Name of the project directory; empty means "derive from the repository".
 	Name  string
 	Files []File
+	Env   Env
 	Steps []Step
+	// Environments maps GitHub environment names to their overrides; nil when
+	// pushbot.yml has no environments key. ForEnvironment applies them.
+	Environments map[string]Environment
+}
+
+// Env says where .env values come from besides the action's env input.
+type Env struct {
+	File    string   // repository path of a dotenv file written into .env as is; "" for none
+	Secrets []string // names of the GitHub secrets the action sends
+}
+
+// Environment overrides top-level keys for one GitHub environment. A nil field
+// keeps the top-level value.
+type Environment struct {
+	Name    *string
+	Files   *[]File
+	EnvFile *string
+	Secrets *[]string
 }
 
 // File maps a path in the repository to a path in the project directory.
@@ -39,12 +59,30 @@ var DefaultSteps = []Step{
 	{Run: "docker compose up -d --remove-orphans"},
 }
 
-var nameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,62}$`)
+var (
+	nameRe       = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,62}$`)
+	secretNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+)
 
 type rawManifest struct {
-	Name  string  `yaml:"name"`
-	Files []File  `yaml:"files"`
-	Steps *[]Step `yaml:"steps"`
+	Name         string                      `yaml:"name"`
+	Files        []File                      `yaml:"files"`
+	Env          *rawEnv                     `yaml:"env"`
+	Steps        *[]Step                     `yaml:"steps"`
+	Environments *map[string]*rawEnvironment `yaml:"environments"`
+}
+
+type rawEnv struct {
+	File    *string   `yaml:"file"`
+	Secrets *[]string `yaml:"secrets"`
+}
+
+type rawEnvironment struct {
+	Name  *string `yaml:"name"`
+	Files *[]File `yaml:"files"`
+	Env   *rawEnv `yaml:"env"`
+	// Steps is decoded only to explain why it cannot be overridden.
+	Steps yaml.Node `yaml:"steps"`
 }
 
 // Parse decodes and validates a manifest. Unknown keys are errors.
@@ -68,7 +106,122 @@ func Parse(data []byte) (*Manifest, error) {
 		}
 		m.Steps = *raw.Steps
 	}
+	file, secrets, err := parseEnv(raw.Env)
+	if err != nil {
+		return nil, fmt.Errorf("pushbot.yml: %w", err)
+	}
+	if file != nil {
+		m.Env.File = *file
+	}
+	if secrets != nil {
+		m.Env.Secrets = *secrets
+	}
+	if raw.Environments != nil {
+		if m.Environments, err = parseEnvironments(*raw.Environments); err != nil {
+			return nil, fmt.Errorf("pushbot.yml: %w", err)
+		}
+	}
 	return m, nil
+}
+
+// ForEnvironment returns the manifest for a deploy from the given GitHub
+// environment ("" when the job has none) with its overrides applied.
+func (m *Manifest) ForEnvironment(environment string) (*Manifest, error) {
+	if m.Environments == nil {
+		return m, nil
+	}
+	if environment == "" {
+		return nil, errors.New("pushbot.yml lists environments, but the job has no environment: set environment: in the workflow")
+	}
+	var names []string
+	for name, o := range m.Environments {
+		if !strings.EqualFold(name, environment) {
+			names = append(names, name)
+			continue
+		}
+		r := &Manifest{Name: m.Name, Files: m.Files, Env: m.Env, Steps: m.Steps}
+		if o.Name != nil {
+			r.Name = *o.Name
+		}
+		if o.Files != nil {
+			r.Files = *o.Files
+		}
+		if o.EnvFile != nil {
+			r.Env.File = *o.EnvFile
+		}
+		if o.Secrets != nil {
+			r.Env.Secrets = *o.Secrets
+		}
+		return r, nil
+	}
+	sort.Slice(names, func(i, j int) bool { return strings.ToLower(names[i]) < strings.ToLower(names[j]) })
+	return nil, fmt.Errorf("environment %q is not listed in environments of pushbot.yml (%s)", environment, strings.Join(names, ", "))
+}
+
+// parseEnv validates an env block; nil results mean the key is absent.
+func parseEnv(r *rawEnv) (file *string, secrets *[]string, err error) {
+	if r == nil {
+		return nil, nil, nil
+	}
+	if r.File != nil {
+		clean, err := cleanRel(*r.File, false)
+		if err != nil {
+			return nil, nil, fmt.Errorf("env.file: %w", err)
+		}
+		file = &clean
+	}
+	if r.Secrets != nil {
+		seen := map[string]bool{}
+		for _, name := range *r.Secrets {
+			upper := strings.ToUpper(name)
+			switch {
+			case !secretNameRe.MatchString(name):
+				return nil, nil, fmt.Errorf("env.secrets: invalid name %q: must match %s", name, secretNameRe)
+			case strings.HasPrefix(upper, "GITHUB_"):
+				return nil, nil, fmt.Errorf("env.secrets: %s: names starting with GITHUB_ are reserved by GitHub", name)
+			case seen[upper]:
+				return nil, nil, fmt.Errorf("env.secrets: %s is listed twice (GitHub secret names are case-insensitive)", name)
+			}
+			seen[upper] = true
+		}
+		secrets = r.Secrets
+	}
+	return file, secrets, nil
+}
+
+func parseEnvironments(raw map[string]*rawEnvironment) (map[string]Environment, error) {
+	if len(raw) == 0 {
+		return nil, errors.New("environments must list at least one environment (omit the key to deploy the same way everywhere)")
+	}
+	envs := map[string]Environment{}
+	seen := map[string]string{}
+	for name, r := range raw {
+		if name == "" {
+			return nil, errors.New("environments: environment name must not be empty")
+		}
+		if other, ok := seen[strings.ToLower(name)]; ok {
+			return nil, fmt.Errorf("environments: %q and %q name the same environment twice (GitHub environment names are case-insensitive)", other, name)
+		}
+		seen[strings.ToLower(name)] = name
+		var e Environment
+		if r != nil {
+			if r.Steps.Kind != 0 {
+				return nil, fmt.Errorf("line %d: environments.%s: steps cannot be overridden per environment, so that every environment runs the same deploy; check $PUSHBOT_ENVIRONMENT in a step instead", r.Steps.Line, name)
+			}
+			if r.Name != nil {
+				if err := ValidateName(*r.Name); err != nil {
+					return nil, fmt.Errorf("environments.%s: %w", name, err)
+				}
+			}
+			file, secrets, err := parseEnv(r.Env)
+			if err != nil {
+				return nil, fmt.Errorf("environments.%s: %w", name, err)
+			}
+			e = Environment{Name: r.Name, Files: r.Files, EnvFile: file, Secrets: secrets}
+		}
+		envs[name] = e
+	}
+	return envs, nil
 }
 
 // ValidateName checks a project name.

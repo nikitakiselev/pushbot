@@ -30,6 +30,27 @@ func TestVerifyValid(t *testing.T) {
 	}
 }
 
+func TestVerifyEnvironment(t *testing.T) {
+	iss := oidctest.NewIssuer(t)
+	v := NewVerifier(iss.URL, "pushbot", rules)
+
+	c, err := v.Verify(context.Background(), iss.Token(t, map[string]any{"environment": "staging"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Environment != "staging" {
+		t.Errorf("environment = %q, want staging", c.Environment)
+	}
+
+	c, err = v.Verify(context.Background(), iss.Token(t, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Environment != "" {
+		t.Errorf("environment = %q for a job without one", c.Environment)
+	}
+}
+
 func TestVerifyNumericClaims(t *testing.T) {
 	iss := oidctest.NewIssuer(t)
 	v := NewVerifier(iss.URL, "pushbot", rules)

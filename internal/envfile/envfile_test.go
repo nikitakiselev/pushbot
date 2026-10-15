@@ -46,14 +46,23 @@ func TestWrite(t *testing.T) {
 	if err := os.WriteFile(file, []byte("OLD=1\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := Write(file, []Var{{Key: "A", Value: "x$y"}, {Key: "B", Value: ""}}); err != nil {
+	err := Write(file, Content{
+		Env:      []Var{{Key: "A", Value: "x$y"}, {Key: "B", Value: ""}},
+		Secrets:  []Var{{Key: "DB_PASSWORD", Value: "hunter2"}},
+		FileName: "deploy/production.env",
+		File:     []byte("APP_NAME=\"mBlog\"\nURL=\"mysql://${DB_PASSWORD}@db\""),
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(file)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := string(data), "A='x$y'\nB=''\n"; got != want {
+	want := "# pushbot: env input\nA='x$y'\nB=''\n" +
+		"# pushbot: secrets\nDB_PASSWORD='hunter2'\n" +
+		"# pushbot: deploy/production.env\nAPP_NAME=\"mBlog\"\nURL=\"mysql://${DB_PASSWORD}@db\"\n"
+	if got := string(data); got != want {
 		t.Errorf("content = %q, want %q", got, want)
 	}
 	info, err := os.Stat(file)
@@ -65,14 +74,107 @@ func TestWrite(t *testing.T) {
 	}
 }
 
-func TestWriteEmpty(t *testing.T) {
-	file := filepath.Join(t.TempDir(), ".env")
-	if err := Write(file, nil); err != nil {
+func TestWriteSkipsEmptyParts(t *testing.T) {
+	cases := map[string]struct {
+		c    Content
+		want string
+	}{
+		"nothing":    {Content{}, ""},
+		"env only":   {Content{Env: []Var{{Key: "A", Value: "1"}}}, "# pushbot: env input\nA='1'\n"},
+		"empty file": {Content{FileName: "x.env", File: []byte{}}, ""},
+		"file only":  {Content{FileName: "x.env", File: []byte("A=1\n")}, "# pushbot: x.env\nA=1\n"},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			file := filepath.Join(t.TempDir(), ".env")
+			if err := Write(file, c.c); err != nil {
+				t.Fatal(err)
+			}
+			if data, _ := os.ReadFile(file); string(data) != c.want {
+				t.Errorf("content = %q, want %q", data, c.want)
+			}
+		})
+	}
+}
+
+func TestFileKeys(t *testing.T) {
+	data := "# comment\n" +
+		"\n" +
+		"export A=1\n" +
+		"  B = two words\n" +
+		"C=\"multi\n" +
+		"line \\\" still open\n" +
+		"end\"\n" +
+		"D='x\n" +
+		"it\\'s still open\n" +
+		"y'\n" +
+		"E=\"one line\" # comment\n" +
+		"F=\r\n" +
+		"G=it's fine unquoted\n"
+	keys, err := FileKeys([]byte(data))
+	if err != nil {
 		t.Fatal(err)
 	}
-	data, _ := os.ReadFile(file)
-	if len(data) != 0 {
-		t.Errorf("content = %q, want empty", data)
+	if want := []string{"A", "B", "C", "D", "E", "F", "G"}; !reflect.DeepEqual(keys, want) {
+		t.Errorf("keys = %q, want %q", keys, want)
+	}
+}
+
+func TestFileKeysErrors(t *testing.T) {
+	cases := map[string]string{
+		"A=1\nnot a pair\n": "line 2: expected KEY=VALUE",
+		"1A=x":              "line 1: expected KEY=VALUE",
+		"A=1\nA=2":          "line 2: duplicate key A",
+		"A=\"open\nB=2\n":   `line 1: A: unterminated " quote`,
+		"A='open":           "line 1: A: unterminated ' quote",
+		"A=\"escaped \\\"":  `line 1: A: unterminated " quote`,
+	}
+	for in, want := range cases {
+		_, err := FileKeys([]byte(in))
+		if err == nil || err.Error() != want {
+			t.Errorf("FileKeys(%q) error = %v, want %q", in, err, want)
+		}
+	}
+}
+
+func TestCheck(t *testing.T) {
+	keys := []string{"APP_NAME", "DB_PASSWORD", "IMAGE_TAG"}
+	warnings, err := Check([]Var{
+		{Key: "IMAGE_TAG", Value: "v1"},
+		{Key: "DB_PASSWORD", Value: "a$$b"},
+		{Key: "QUOTE", Value: `"`},
+		{Key: "HALF", Value: `"open`},
+		{Key: "TEMPLATE", Value: "${UNKNOWN} and $APP_NAME"},
+	}, keys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{`DB_PASSWORD contains "$$": env and secrets values are taken as is, so it stays "$$"`}
+	if !reflect.DeepEqual(warnings, want) {
+		t.Errorf("warnings = %q, want %q", warnings, want)
+	}
+}
+
+func TestCheckErrors(t *testing.T) {
+	keys := []string{"APP_NAME", "MAIL_FROM_NAME"}
+	cases := map[string]struct {
+		v    Var
+		want string
+	}{
+		"wrapped in quotes": {Var{"APP_NAME", `"mBlog"`}, "APP_NAME: the value is wrapped in double quotes; env and secrets values are taken as is, remove the quotes"},
+		"reference":         {Var{"MAIL_FROM_NAME", "${APP_NAME}"}, "MAIL_FROM_NAME: ${APP_NAME} is not expanded in env and secrets; move MAIL_FROM_NAME to the env file"},
+		"default reference": {Var{"MAIL_FROM_NAME", "x ${APP_NAME:-blog}"}, "MAIL_FROM_NAME: ${APP_NAME} is not expanded in env and secrets; move MAIL_FROM_NAME to the env file"},
+		"single quote":      {Var{"PASS", "it's"}, "PASS: values containing ' are not supported"},
+		"newline":           {Var{"PASS", "a\nb"}, "PASS: multiline values are not supported"},
+		"nul":               {Var{"PASS", "a\x00b"}, "PASS: values containing NUL bytes are not supported"},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, err := Check([]Var{c.v}, keys)
+			if err == nil || err.Error() != c.want {
+				t.Errorf("error = %v, want %q", err, c.want)
+			}
+		})
 	}
 }
 

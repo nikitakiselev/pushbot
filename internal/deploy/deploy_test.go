@@ -144,7 +144,7 @@ steps:
 		"config/app.conf":      "a=1\n",
 		"config/nested/x.conf": "x\n",
 		"compose.override.yml": "prod\n",
-		".env":                 "IMAGE_TAG='v1'\nDB_PASSWORD='hunter22'\n",
+		".env":                 "# pushbot: env input\nIMAGE_TAG='v1'\nDB_PASSWORD='hunter22'\n",
 	} {
 		got, err := os.ReadFile(filepath.Join(dir, name))
 		if err != nil || string(got) != want {
@@ -162,6 +162,182 @@ steps:
 	}
 	if entries, _ := os.ReadDir(filepath.Join(e.state, "tmp")); len(entries) != 0 {
 		t.Errorf("tmp not cleaned: %v", entries)
+	}
+}
+
+func TestDeployEnvSources(t *testing.T) {
+	e := newEnv(t)
+	bundle := writeBundle(t, map[string]string{
+		"deploy/production.env": "APP_NAME=\"mBlog\"\nDATABASE_URL=\"mysql://app:${DB_PASSWORD}@db/app\"\n",
+	})
+	m := parse(t, `
+env:
+  file: deploy/production.env
+  secrets: [DB_PASSWORD]
+steps:
+  - run: echo "tag=$IMAGE_TAG secret=$DB_PASSWORD app=${APP_NAME:-unset} environment=[$PUSHBOT_ENVIRONMENT]"
+`)
+	res, out := run(t, e, Request{
+		Claims:     claims("me/app", "1"),
+		Manifest:   m,
+		Env:        []envfile.Var{{Key: "IMAGE_TAG", Value: "v1"}},
+		Secrets:    map[string]string{"DB_PASSWORD": "hunter22"},
+		BundlePath: bundle,
+	})
+	if !res.Success {
+		t.Fatalf("deploy failed: %s\n%s", res.Reason, out)
+	}
+	for _, want := range []string{
+		"==> .env: env IMAGE_TAG; secrets DB_PASSWORD; deploy/production.env (2 keys)",
+		"tag=v1 secret=hunter22 app=unset environment=[]",
+	} {
+		if !strings.Contains(out, want+"\n") {
+			t.Errorf("output lacks %q:\n%s", want, out)
+		}
+	}
+	got, _ := os.ReadFile(filepath.Join(e.root, "app", ".env"))
+	want := "# pushbot: env input\nIMAGE_TAG='v1'\n" +
+		"# pushbot: secrets\nDB_PASSWORD='hunter22'\n" +
+		"# pushbot: deploy/production.env\nAPP_NAME=\"mBlog\"\nDATABASE_URL=\"mysql://app:${DB_PASSWORD}@db/app\"\n"
+	if string(got) != want {
+		t.Errorf(".env = %q, want %q", got, want)
+	}
+	if _, err := os.Stat(filepath.Join(e.root, "app", "deploy")); err == nil {
+		t.Error("the env file was copied into the project directory")
+	}
+	logs, _ := filepath.Glob(filepath.Join(e.state, "logs", "app", "*.log"))
+	if len(logs) != 1 {
+		t.Fatalf("log files = %v", logs)
+	}
+	if logData, _ := os.ReadFile(logs[0]); strings.Contains(string(logData), "hunter22") {
+		t.Errorf("secret is not masked in the server log:\n%s", logData)
+	}
+}
+
+func TestDeployEnvironment(t *testing.T) {
+	e := newEnv(t)
+	bundle := writeBundle(t, map[string]string{"deploy/staging.env": "APP_ENV=staging\n"})
+	m := parse(t, `
+name: blog
+env:
+  file: deploy/production.env
+steps:
+  - run: echo "environment=$PUSHBOT_ENVIRONMENT"
+environments:
+  production: {}
+  staging:
+    name: blog-staging
+    env:
+      file: deploy/staging.env
+`)
+	c := claims("me/blog", "1")
+	c.Environment = "staging"
+	res, out := run(t, e, Request{Claims: c, Manifest: m, BundlePath: bundle})
+	if !res.Success {
+		t.Fatalf("deploy failed: %s\n%s", res.Reason, out)
+	}
+	dir := filepath.Join(e.root, "blog-staging")
+	for _, want := range []string{
+		"==> me/blog@a1b2c3d (run #77, environment staging) → " + dir,
+		"==> .env: deploy/staging.env (1 keys)",
+		"environment=staging",
+	} {
+		if !strings.Contains(out, want+"\n") {
+			t.Errorf("output lacks %q:\n%s", want, out)
+		}
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, ".env")); string(got) != "# pushbot: deploy/staging.env\nAPP_ENV=staging\n" {
+		t.Errorf(".env = %q", got)
+	}
+}
+
+func TestDeployEnvFileWithBOM(t *testing.T) {
+	e := newEnv(t)
+	bundle := writeBundle(t, map[string]string{"app.env": "\xEF\xBB\xBFAPP_NAME=x\n"})
+	m := parse(t, "env:\n  file: app.env\nsteps:\n  - run: 'true'")
+	res, out := run(t, e, Request{Claims: claims("me/app", "1"), Manifest: m, BundlePath: bundle})
+	if !res.Success {
+		t.Fatalf("deploy failed: %s\n%s", res.Reason, out)
+	}
+	// The file lands in the middle of .env, where a byte order mark would become part of the key.
+	if got, _ := os.ReadFile(filepath.Join(e.root, "app", ".env")); string(got) != "# pushbot: app.env\nAPP_NAME=x\n" {
+		t.Errorf(".env = %q", got)
+	}
+}
+
+func TestDeployWarnsAboutDoubleDollar(t *testing.T) {
+	e := newEnv(t)
+	m := parse(t, "steps:\n  - run: 'true'")
+	vars := []envfile.Var{{Key: "DB_PASSWORD", Value: "ab$$cd"}}
+	res, out := run(t, e, Request{Claims: claims("me/app", "1"), Manifest: m, Env: vars})
+	if !res.Success {
+		t.Fatalf("deploy failed: %s\n%s", res.Reason, out)
+	}
+	want := `==> warning: DB_PASSWORD contains "$$": env and secrets values are taken as is, so it stays "$$"`
+	if !strings.Contains(out, want+"\n") {
+		t.Errorf("output lacks %q:\n%s", want, out)
+	}
+}
+
+func TestPrepareEnvErrors(t *testing.T) {
+	e := newEnv(t)
+	bundle := writeBundle(t, map[string]string{
+		"prod.env":   "APP_NAME=mBlog\nDB_PASSWORD=oops\n",
+		"bad.env":    "APP_NAME=mBlog\nnot a pair\n",
+		"big.env":    "A=" + strings.Repeat("x", 64<<10) + "\n",
+		"dir.env/x":  "x",
+		"docker.yml": "services: {}\n",
+	})
+	withEnv := func(environment string) *auth.Claims {
+		c := claims("me/app", "1")
+		c.Environment = environment
+		return c
+	}
+	envs := "environments:\n  production: {}\n"
+	cases := map[string]struct {
+		req  Request
+		want string
+	}{
+		"env file missing":  {Request{Manifest: parse(t, "env:\n  file: missing.env"), BundlePath: bundle}, "missing.env"},
+		"env file is a dir": {Request{Manifest: parse(t, "env:\n  file: dir.env"), BundlePath: bundle}, "dir.env"},
+		"env file under a file": {Request{Manifest: parse(t, "env:\n  file: docker.yml/x.env"), BundlePath: bundle},
+			"env.file docker.yml/x.env: not in the bundle"},
+		"env file too big":  {Request{Manifest: parse(t, "env:\n  file: big.env"), BundlePath: bundle}, "big.env"},
+		"env file bad line": {Request{Manifest: parse(t, "env:\n  file: bad.env"), BundlePath: bundle}, "bad.env line 2: expected KEY=VALUE"},
+		"secret not sent": {Request{Manifest: parse(t, "env:\n  secrets: [DB_PASSWORD]")},
+			"secret DB_PASSWORD is declared in pushbot.yml but was not sent"},
+		"secret not declared": {Request{Manifest: parse(t, ""), Secrets: map[string]string{"X": "y"}},
+			"secret X was sent but is not declared in env.secrets"},
+		"env and secret": {Request{Manifest: parse(t, "env:\n  secrets: [A]"), Env: []envfile.Var{{Key: "A", Value: "1"}}, Secrets: map[string]string{"A": "2"}},
+			"A is set both in env and in secrets; keep one"},
+		"secret and file": {Request{Manifest: parse(t, "env:\n  file: prod.env\n  secrets: [DB_PASSWORD]"), Secrets: map[string]string{"DB_PASSWORD": "x"}, BundlePath: bundle},
+			"DB_PASSWORD is set both in secrets and in prod.env; keep one"},
+		"env and file": {Request{Manifest: parse(t, "env:\n  file: prod.env"), Env: []envfile.Var{{Key: "APP_NAME", Value: "x"}}, BundlePath: bundle},
+			"APP_NAME is set both in env and in prod.env; keep one"},
+		"quoted env value": {Request{Manifest: parse(t, ""), Env: []envfile.Var{{Key: "APP_NAME", Value: `"mBlog"`}}},
+			"APP_NAME: the value is wrapped in double quotes"},
+		"reference to file key": {Request{Manifest: parse(t, "env:\n  file: prod.env"), Env: []envfile.Var{{Key: "MAIL_FROM", Value: "${APP_NAME}"}}, BundlePath: bundle},
+			"MAIL_FROM: ${APP_NAME} is not expanded"},
+		"multiline secret": {Request{Manifest: parse(t, "env:\n  secrets: [KEY]"), Secrets: map[string]string{"KEY": "a\nb"}},
+			"KEY: multiline values are not supported"},
+		"environment not listed": {Request{Claims: withEnv("staging"), Manifest: parse(t, envs)},
+			`environment "staging" is not listed`},
+		"job without environment": {Request{Manifest: parse(t, envs)},
+			"the job has no environment"},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			if c.req.Claims == nil {
+				c.req.Claims = claims("me/app", "1")
+			}
+			_, err := e.d.Prepare(c.req)
+			if !errors.Is(err, ErrBadRequest) {
+				t.Fatalf("err = %v, want ErrBadRequest", err)
+			}
+			if !strings.Contains(err.Error(), c.want) {
+				t.Errorf("error %q lacks %q", err, c.want)
+			}
+		})
 	}
 }
 
