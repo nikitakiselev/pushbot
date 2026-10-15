@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -139,7 +138,7 @@ func checkService(o Options) (Result, bool) {
 }
 
 func checkDaemon(ctx context.Context, o Options, listen string) Result {
-	body, err := get(ctx, o.Client, "http://"+localAddr(listen)+"/healthz")
+	body, err := get(ctx, o.Client, "http://"+config.DialAddr(listen)+"/healthz")
 	if err == nil && strings.TrimSpace(body) != "ok" {
 		err = fmt.Errorf("unexpected response %q", body)
 	}
@@ -150,7 +149,7 @@ func checkDaemon(ctx context.Context, o Options, listen string) Result {
 }
 
 func checkMetrics(ctx context.Context, o Options, listen string) Result {
-	if _, err := get(ctx, o.Client, "http://"+localAddr(listen)+"/metrics"); err != nil {
+	if _, err := get(ctx, o.Client, "http://"+config.DialAddr(listen)+"/metrics"); err != nil {
 		return Result{Fail, "metrics on " + listen + " do not answer: " + err.Error(), "see the log: sudo journalctl -u pushbot -n 50"}
 	}
 	return Result{OK, "metrics on " + listen + " answer /metrics", ""}
@@ -170,19 +169,6 @@ func checkURL(ctx context.Context, o Options) Result {
 		return Result{Fail, u + ": " + err.Error(), "check the reverse proxy, see \"Reverse proxy\" in the README"}
 	}
 	return Result{OK, u + " answers through the proxy", ""}
-}
-
-// localAddr turns a listen address into one to connect to: ":9800" and
-// "0.0.0.0:9800" become "127.0.0.1:9800".
-func localAddr(listen string) string {
-	host, port, err := net.SplitHostPort(listen)
-	if err != nil {
-		return listen
-	}
-	if ip := net.ParseIP(host); host == "" || (ip != nil && ip.IsUnspecified()) {
-		host = "127.0.0.1"
-	}
-	return net.JoinHostPort(host, port)
 }
 
 func checkDocker(o Options) Result {
