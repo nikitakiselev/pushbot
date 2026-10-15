@@ -235,9 +235,10 @@ Check every point:
 - **Every variable the compose file needs comes from exactly one source:**
   `env` (one `KEY=VALUE` per line, for values computed in CI), `env.secrets` or
   `env.file`. Together they replace `.env` completely. `env` and secret values are
-  taken literally: no surrounding quotes and no `${VAR}` (both are rejected), no
-  `'`, no line breaks. Store a multi-line secret (a PEM key) base64-encoded and
-  decode it in the application.
+  taken literally: a value wrapped in `"..."` and a `${VAR}` naming another
+  variable from these sources are rejected, `$$` stays `$$` (with a warning in the
+  log); no `'`, no line breaks. Store a multi-line secret (a PEM key) base64-encoded
+  and decode it in the application.
 - **Private images:** by default the action sends the job's `github.token`, and
   the server pulls from ghcr.io with it while the job runs. That needs
   `packages: read` or `write` in the job running the pushbot step. An image

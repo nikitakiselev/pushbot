@@ -69,6 +69,8 @@ func Check(raw []Var, keys []string) (warnings []string, err error) {
 			return nil, fmt.Errorf("%s: values containing ' are not supported", v.Key)
 		case strings.ContainsAny(v.Value, "\r\n"):
 			return nil, fmt.Errorf("%s: multiline values are not supported", v.Key)
+		case strings.ContainsRune(v.Value, 0):
+			return nil, fmt.Errorf("%s: values containing NUL bytes are not supported", v.Key)
 		case len(v.Value) >= 2 && strings.HasPrefix(v.Value, `"`) && strings.HasSuffix(v.Value, `"`):
 			return nil, fmt.Errorf("%s: the value is wrapped in double quotes; env and secrets values are taken as is, remove the quotes", v.Key)
 		}
@@ -121,12 +123,12 @@ func FileKeys(data []byte) ([]string, error) {
 	return keys, nil
 }
 
-// closesQuote reports whether s contains the closing quote; in double quotes a
-// backslash escapes the next character.
+// closesQuote reports whether s contains the closing quote. A backslash
+// escapes the next character in both kinds of quotes, as docker compose reads them.
 func closesQuote(s string, quote byte) bool {
 	for i := 0; i < len(s); i++ {
 		switch {
-		case quote == '"' && s[i] == '\\':
+		case s[i] == '\\':
 			i++
 		case s[i] == quote:
 			return true

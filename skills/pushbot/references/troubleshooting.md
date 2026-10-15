@@ -24,7 +24,7 @@ gh run view <run-id> --log-failed
 
 ```sh
 sudo journalctl -u pushbot --since "1 hour ago"   # rejected requests with the reason and repository
-sudo ls -t /var/lib/pushbot/logs/<name>/          # deploy logs, newest first; secrets are masked
+sudo ls -t /var/lib/pushbot/logs/<name>/          # deploy logs, newest first; env and secret values of 4+ characters are masked
 sudo pushbot doctor --url https://pushbot.example.com
 ```
 
@@ -39,7 +39,11 @@ sudo pushbot doctor --url https://pushbot.example.com
 | `cannot get an OIDC token from GitHub` | GitHub's token service failed. | Re-run the job. |
 | `env.file <path> not found` | The `env.file` from `pushbot.yml` does not exist in the checkout. | Fix the path or commit the file. |
 | `env.secrets is set in pushbot.yml: add secrets: ${{ toJSON(secrets) }} to the pushbot step` | The step has no `secrets` input. | Add it as shown. |
-| `secret <NAME> is not set in GitHub ...: gh secret set <NAME> ...` | A secret from `env.secrets` does not exist for this job (repository or its environment). | The user runs the command shown. |
+| `secret <NAME> is not set in GitHub ...: gh secret set <NAME> ...` | A secret from `env.secrets` does not exist for this job. Environment secrets reach only jobs with that `environment:`; a job without one sees repository secrets only. | If the job should run in an environment, add `environment:` to it. Otherwise the user runs the command shown. |
+| `environment "<x>" is not listed in environments of pushbot.yml (...)` | `pushbot.yml` has `environments`, and the job's `environment:` is not among them (names compare case-insensitively). | Fix `environment:` in the workflow, or add `<x>: {}` to `environments`. |
+| `pushbot.yml lists environments, but the job has no environment: ...` | `pushbot.yml` has `environments`, the job has no `environment:`. | Add `environment: <name>` to the job. |
+| `pushbot.yml: <key> must be a map` / `must be a list`, `pushbot.yml: env.secrets: invalid name ...`, `cannot parse pushbot.yml` | The action reads `files`, `env` and `environments` itself, before the server checks the rest. | Fix `pushbot.yml` (see [connect-project.md](connect-project.md#4-write-pushbotyml)). |
+| `the server is too old for env.secrets: run sudo pushbot upgrade on it` | The daemon predates `env.secrets` and answered `unknown field "secrets"`. | On the server: `sudo pushbot upgrade`. |
 
 ## Connection errors
 
@@ -76,7 +80,6 @@ before:
 | 401 | `unauthorized: token already used` | The same token arrived twice, usually a proxy retrying the request. | Re-run the job; turn off retries to pushbot in the proxy. |
 | 401 | `missing bearer token` | The proxy strips the `Authorization` header, or the request did not come from the action. | Pass `Authorization` through the proxy. |
 | 400 | `pushbot.yml: ...` (with a line number) | Invalid manifest: an unknown key, a bad `files` or `env` entry, an empty `run`, empty `steps`, `steps` under `environments`. | Fix it; the keys are `name`, `files`, `env`, `steps`, `environments` (see [connect-project.md](connect-project.md#4-write-pushbotyml)). On an older server the new keys are unknown: `sudo pushbot upgrade`. |
-| 400 | `bad request: environment "<x>" is not listed in environments of pushbot.yml (...)`, `... the job has no environment ...` | `pushbot.yml` has `environments`, and the job's `environment:` is missing or not among them. | Add the environment to `environments` (`<x>: {}`) or fix `environment:` in the workflow. |
 | 400 | `bad request: <KEY>: the value is wrapped in double quotes ...` | A value in `env` or a secret was written dotenv-style, `"..."`. | Remove the quotes, or move the variable to `env.file`. |
 | 400 | `bad request: <KEY>: ${<OTHER>} is not expanded in env and secrets ...` | An `env` value or a secret refers to another variable. | Move `<KEY>` to `env.file`, where `${...}` works. |
 | 400 | `bad request: <KEY> is set both in <a> and in <b>; keep one` | The same variable comes from two of `env`, the secrets and `env.file`. | Remove it from one. |

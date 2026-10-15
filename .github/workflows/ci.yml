@@ -74,7 +74,8 @@ jobs:
           grep -qx "GREETING='hello'" "$dir/.env"
           grep -qx "E2E_SECRET='s3cret'" "$dir/.env"
           grep -qx 'APP_NAME="pushbot e2e"' "$dir/.env"
-          ! grep -q UNUSED "$dir/.env"
+          # Not "! grep": bash -e ignores a negated command's status.
+          if grep -q UNUSED "$dir/.env"; then exit 1; fi
 
       - name: Daemon log
         if: always()

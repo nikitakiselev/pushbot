@@ -175,7 +175,7 @@ env:
   file: deploy/production.env
   secrets: [DB_PASSWORD]
 steps:
-  - run: echo "tag=$IMAGE_TAG secret=$DB_PASSWORD app=${APP_NAME:-unset}"
+  - run: echo "tag=$IMAGE_TAG secret=$DB_PASSWORD app=${APP_NAME:-unset} environment=[$PUSHBOT_ENVIRONMENT]"
 `)
 	res, out := run(t, e, Request{
 		Claims:     claims("me/app", "1"),
@@ -189,7 +189,7 @@ steps:
 	}
 	for _, want := range []string{
 		"==> .env: env IMAGE_TAG; secrets DB_PASSWORD; deploy/production.env (2 keys)",
-		"tag=v1 secret=hunter22 app=unset",
+		"tag=v1 secret=hunter22 app=unset environment=[]",
 	} {
 		if !strings.Contains(out, want+"\n") {
 			t.Errorf("output lacks %q:\n%s", want, out)
@@ -251,6 +251,20 @@ environments:
 	}
 }
 
+func TestDeployEnvFileWithBOM(t *testing.T) {
+	e := newEnv(t)
+	bundle := writeBundle(t, map[string]string{"app.env": "\xEF\xBB\xBFAPP_NAME=x\n"})
+	m := parse(t, "env:\n  file: app.env\nsteps:\n  - run: 'true'")
+	res, out := run(t, e, Request{Claims: claims("me/app", "1"), Manifest: m, BundlePath: bundle})
+	if !res.Success {
+		t.Fatalf("deploy failed: %s\n%s", res.Reason, out)
+	}
+	// The file lands in the middle of .env, where a byte order mark would become part of the key.
+	if got, _ := os.ReadFile(filepath.Join(e.root, "app", ".env")); string(got) != "# pushbot: app.env\nAPP_NAME=x\n" {
+		t.Errorf(".env = %q", got)
+	}
+}
+
 func TestDeployWarnsAboutDoubleDollar(t *testing.T) {
 	e := newEnv(t)
 	m := parse(t, "steps:\n  - run: 'true'")
@@ -286,6 +300,8 @@ func TestPrepareEnvErrors(t *testing.T) {
 	}{
 		"env file missing":  {Request{Manifest: parse(t, "env:\n  file: missing.env"), BundlePath: bundle}, "missing.env"},
 		"env file is a dir": {Request{Manifest: parse(t, "env:\n  file: dir.env"), BundlePath: bundle}, "dir.env"},
+		"env file under a file": {Request{Manifest: parse(t, "env:\n  file: docker.yml/x.env"), BundlePath: bundle},
+			"env.file docker.yml/x.env: not in the bundle"},
 		"env file too big":  {Request{Manifest: parse(t, "env:\n  file: big.env"), BundlePath: bundle}, "big.env"},
 		"env file bad line": {Request{Manifest: parse(t, "env:\n  file: bad.env"), BundlePath: bundle}, "bad.env line 2: expected KEY=VALUE"},
 		"secret not sent": {Request{Manifest: parse(t, "env:\n  secrets: [DB_PASSWORD]")},

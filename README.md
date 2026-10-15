@@ -412,8 +412,9 @@ limit).
 - The first deploy binds the project name to the repository (by `repository_id`);
   another repository with the same `name` gets 403. To release a name, remove its
   entry from `/var/lib/pushbot/projects.json`.
-- `env` and secret values are masked as `***` in the server logs, values from the env
-  file are not; GitHub masks secrets in the Actions log.
+- `env` and secret values of 4 characters or more are masked as `***` in the server
+  logs (shorter ones such as `1` or `on` would garble them); values from the env file
+  are not masked. GitHub masks secrets in the Actions log.
 
 ## Logs
 

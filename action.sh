@@ -39,17 +39,48 @@ environment=$(printf '%s' "$payload" | base64 -d | jq -r '.environment // ""') |
 if [ -n "$environment" ]; then echo "pushbot: environment $environment"; fi
 
 # files, env.file and env.secrets for this environment: a key under
-# environments.<name> replaces the top-level one. An unlisted environment gets
-# the top level here; the daemon rejects it with a clear message. A files item
-# is a path (string) or a "src: dest" map, whose key is the path.
-PUSHBOT_ENVIRONMENT="$environment" yq -o=json '
-  (.environments // {} | to_entries
-    | map(select((.key | downcase) == (strenv(PUSHBOT_ENVIRONMENT) | downcase)))
-    | .[0].value // {}) as $o
-  | {"files": [($o.files // .files // [])[] | select(tag == "!!map") |= keys[0]],
-     "env_file": ($o.env.file // .env.file // ""),
-     "secrets": ($o.env.secrets // .env.secrets // [])}
-' "$PUSHBOT_CONFIG" >"$work/manifest.json"
+# environments.<name> replaces the top-level one. The environment checks repeat
+# the daemon's, because a job with the wrong environment also lacks that
+# environment's secrets and would fail on them with a misleading message. Other
+# checks are left to the daemon; only the types used here are checked.
+yq -o=json . "$PUSHBOT_CONFIG" >"$work/pushbot.json" || die "cannot parse $PUSHBOT_CONFIG"
+jq --arg env "$environment" --arg cfg "$PUSHBOT_CONFIG" --arg name '^[A-Za-z_][A-Za-z0-9_]*$' '
+  def fail(msg): {error: "\($cfg): \(msg)"};
+  (. // {}) as $m
+  | if ($m | type) != "object" then fail("expected a map")
+    elif ($m.environments // {} | type) != "object" then fail("environments must be a map")
+    # An empty map is an error the daemon reports.
+    elif ($m.environments // {} | length) > 0 and $env == "" then
+      {error: "\($cfg) lists environments, but the job has no environment: set environment: in the workflow"}
+    else
+      ($m.environments // {} | to_entries
+        | map(select((.key | ascii_downcase) == ($env | ascii_downcase))) | first) as $found
+      | if ($m.environments // {} | length) > 0 and $found == null then
+          {error: "environment \"\($env)\" is not listed in environments of \($cfg) (\($m.environments | keys | sort_by(ascii_downcase) | join(", ")))"}
+        else
+          ($found.value // {}) as $o
+          | if ($o | type) != "object" then fail("environments.\($found.key) must be a map")
+            elif ($m.env // {} | type) != "object" or ($o.env // {} | type) != "object" then fail("env must be a map")
+            else
+              {files: ($o.files // $m.files // []), env_file: ($o.env.file // $m.env.file // ""),
+               secrets: ($o.env.secrets // $m.env.secrets // [])}
+              | if (.files | type) != "array" then fail("files must be a list")
+                elif (.secrets | type) != "array" then fail("env.secrets must be a list")
+                elif (.env_file | type) != "string" then fail("env.file must be a path")
+                else
+                  # Checked here too: an invalid name is never set in GitHub either.
+                  (.secrets | map(select(type != "string" or (test($name) | not)) | tostring) | first) as $bad
+                  | if $bad then fail("env.secrets: invalid name \($bad | tojson): must match \($name)")
+                    # A files item is a path or a "src: dest" map, whose key is the path.
+                    else .files |= map(if type == "object" then keys_unsorted[0] else tostring end)
+                    end
+                end
+            end
+        end
+    end
+' "$work/pushbot.json" >"$work/manifest.json" || die "cannot read $PUSHBOT_CONFIG"
+error=$(jq -r '.error // empty' "$work/manifest.json")
+[ -z "$error" ] || die "$error"
 
 files=()
 while IFS= read -r f; do
@@ -58,7 +89,13 @@ done < <(jq -r '.files[]' "$work/manifest.json")
 env_file=$(jq -r .env_file "$work/manifest.json")
 if [ -n "$env_file" ]; then
   [ -f "$env_file" ] || die "env.file $env_file not found"
-  files+=("$env_file")
+  # Pack it once, also when it is listed in files or inside a listed directory.
+  covered=false
+  for f in "${files[@]}"; do
+    f=${f%/}
+    if [ "$env_file" = "$f" ] || [[ "$env_file" == "$f"/* ]]; then covered=true; fi
+  done
+  if [ "$covered" = false ]; then files+=("$env_file"); fi
 fi
 
 form=(-F "manifest=<$PUSHBOT_CONFIG")
@@ -116,7 +153,13 @@ set -e
 
 # The last status line wins (a proxy may send "100 Continue" first).
 code=$(grep -E '^HTTP/' "$work/response-headers" | tail -n1 | awk '{print $2}')
-[ "$code" = 200 ] || die "the server rejected the deploy (HTTP $code)"
+if [ "$code" != 200 ]; then
+  # Daemons before env.secrets reject the field before reading the manifest.
+  if grep -q '^pushbot: unknown field "secrets"' "$work/out"; then
+    die "the server is too old for env.secrets: run sudo pushbot upgrade on it"
+  fi
+  die "the server rejected the deploy (HTTP $code)"
+fi
 
 last=$(tail -n1 "$work/out")
 case "$last" in

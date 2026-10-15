@@ -3,6 +3,7 @@
 package deploy
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -242,6 +243,8 @@ func (j *Job) prepareEnv() error {
 		if err != nil {
 			return fmt.Errorf("%w: env.file %s: %v", ErrBadRequest, f, err)
 		}
+		// The file lands in the middle of .env, where a byte order mark would become part of a key.
+		data = bytes.TrimPrefix(data, []byte("\xEF\xBB\xBF"))
 		if fileKeys, err = envfile.FileKeys(data); err != nil {
 			return fmt.Errorf("%w: %s %v", ErrBadRequest, f, err)
 		}
@@ -289,11 +292,9 @@ func rawVars(c envfile.Content) []envfile.Var {
 
 func readEnvFile(file string) ([]byte, error) {
 	info, err := os.Lstat(file)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, errors.New("not in the bundle")
-	}
 	if err != nil {
-		return nil, err
+		// The path is inside the temporary bundle directory: do not show it.
+		return nil, errors.New("not in the bundle")
 	}
 	if !info.Mode().IsRegular() {
 		return nil, errors.New("not a regular file")

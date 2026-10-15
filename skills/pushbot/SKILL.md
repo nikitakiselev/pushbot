@@ -36,14 +36,15 @@ Most mistakes come from assuming pushbot works like a CI runner or an SSH deploy
 It does not:
 
 - **The server builds nothing and clones nothing.** Images come from a registry.
-  Only the files listed under `files` in `pushbot.yml` reach the server; the action
-  packs them from the checked-out repository.
+  Only the files listed under `files` in `pushbot.yml` and its `env.file` reach the
+  server; the action packs them from the checked-out repository.
 - **`.env` is rewritten on every deploy** from three sources and nothing else: the
   action's `env` input (values computed in CI, such as `IMAGE_TAG`), the GitHub
   secrets named in `env.secrets` of `pushbot.yml`, and the dotenv file `env.file`
   from the repository (plain settings, copied as is). A variable in none of them is
   gone after the next deploy; a key in two of them is an error. `env` and secret
-  values are taken literally: no quotes, no `${VAR}`. `.env` cannot be listed in
+  values are taken literally: a value in `"..."` or a `${VAR}` naming another of
+  these variables is rejected, `$$` stays `$$`. `.env` cannot be listed in
   `files`.
 - **Nothing on the server is ever deleted.** Files are overwritten; a file dropped
   from `files` stays on the server; container data such as `./data` is safe.

@@ -106,6 +106,7 @@ func TestFileKeys(t *testing.T) {
 		"line \\\" still open\n" +
 		"end\"\n" +
 		"D='x\n" +
+		"it\\'s still open\n" +
 		"y'\n" +
 		"E=\"one line\" # comment\n" +
 		"F=\r\n" +
@@ -165,6 +166,7 @@ func TestCheckErrors(t *testing.T) {
 		"default reference": {Var{"MAIL_FROM_NAME", "x ${APP_NAME:-blog}"}, "MAIL_FROM_NAME: ${APP_NAME} is not expanded in env and secrets; move MAIL_FROM_NAME to the env file"},
 		"single quote":      {Var{"PASS", "it's"}, "PASS: values containing ' are not supported"},
 		"newline":           {Var{"PASS", "a\nb"}, "PASS: multiline values are not supported"},
+		"nul":               {Var{"PASS", "a\x00b"}, "PASS: values containing NUL bytes are not supported"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
