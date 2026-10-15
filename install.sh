@@ -1,10 +1,10 @@
 #!/bin/sh
 # Install or upgrade pushbot as a systemd service.
 #
-#   curl -fsSL https://raw.githubusercontent.com/nikitakiselev/pushbot/main/install.sh \
-#     | sudo PUSHBOT_ALLOW='your-github-login/*' sh
+#   curl -fsSL https://raw.githubusercontent.com/nikitakiselev/pushbot/main/install.sh | sudo sh
 #
-# PUSHBOT_ALLOW   allow pattern for a new /etc/pushbot/config.yml (ignored if the file exists)
+# Then create the config and start the service: sudo pushbot init
+#
 # PUSHBOT_VERSION release tag to install, default: latest
 set -eu
 
@@ -40,44 +40,27 @@ if ! id pushbot >/dev/null 2>&1; then
   useradd --system --home-dir /var/lib/pushbot --shell /usr/sbin/nologin pushbot
 fi
 usermod -aG docker pushbot
-install -d -o pushbot -g pushbot -m 0750 /var/lib/pushbot /srv/apps
+install -d -o pushbot -g pushbot -m 0750 /var/lib/pushbot
 install -d -m 0755 /etc/pushbot
-
-start=yes
-if [ ! -f /etc/pushbot/config.yml ]; then
-  allow=${PUSHBOT_ALLOW:-}
-  if [ -z "$allow" ]; then
-    allow='YOUR-GITHUB-LOGIN/*'
-    start=no
-  fi
-  cat >/etc/pushbot/config.yml <<EOF
-# pushbot configuration. Restart after changes: systemctl restart pushbot
-listen: 127.0.0.1:9800
-projects_root: /srv/apps
-allow:
-  - $allow
-# Prometheus metrics at /metrics on a separate address (disabled by default):
-# metrics_listen: 127.0.0.1:9801
-EOF
-  echo "Created /etc/pushbot/config.yml"
-fi
-
 systemctl daemon-reload
-systemctl enable pushbot >/dev/null
-if [ "$start" = yes ]; then
+
+if [ -f /etc/pushbot/config.yml ]; then
+  systemctl enable pushbot >/dev/null
   systemctl restart pushbot
   echo "pushbot $(/usr/local/bin/pushbot version) is running: journalctl -u pushbot -f"
-else
-  echo "Edit the allow list in /etc/pushbot/config.yml, then run: systemctl start pushbot"
+  exit 0
 fi
 
-cat <<'EOF'
+# install.sh comes from main, the release may predate pushbot init.
+if ! /usr/local/bin/pushbot init --help >/dev/null 2>&1; then
+  die "pushbot $(/usr/local/bin/pushbot version) is too old to create its config (no pushbot init), install a newer release"
+fi
+# PUSHBOT_ALLOW keeps the install command of earlier versions working.
+if [ -n "${PUSHBOT_ALLOW:-}" ]; then
+  exec /usr/local/bin/pushbot init --allow "$PUSHBOT_ALLOW"
+fi
+cat <<EOF
+pushbot $(/usr/local/bin/pushbot version) is installed. Create the config and start it:
 
-Expose it with Caddy (Caddyfile):
-
-  pushbot.example.com {
-      reverse_proxy 127.0.0.1:9800 {
-          flush_interval -1
-      }
-  }
+  sudo pushbot init
 EOF
