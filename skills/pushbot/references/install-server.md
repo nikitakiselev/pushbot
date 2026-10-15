@@ -41,31 +41,30 @@ suggest Caddy, which gets certificates by itself.
 ## 2. Install
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/nikitakiselev/pushbot/main/install.sh \
-  | sudo PUSHBOT_ALLOW='alice/*' sh
+curl -fsSL https://raw.githubusercontent.com/nikitakiselev/pushbot/main/install.sh | sudo sh
+sudo pushbot init --allow 'alice/*'
 ```
 
 The script installs the binary to `/usr/local/bin`, creates the `pushbot` user in
-the `docker` group, `/srv/apps`, `/var/lib/pushbot`, the config
-`/etc/pushbot/config.yml` and the systemd service, and starts it. It is short; the
-user may want to read it first.
+the `docker` group, `/var/lib/pushbot` and the systemd service. It is short; the
+user may want to read it first. Running it again upgrades pushbot and keeps the
+config.
 
-- `PUSHBOT_ALLOW` takes one pattern. For more, add them to `allow` in the config
-  afterwards (see [Maintenance](#maintenance)).
-- If `/etc/pushbot/config.yml` already exists, the script keeps it and ignores
-  `PUSHBOT_ALLOW`. Running the script again upgrades pushbot.
-- Without `PUSHBOT_ALLOW`, the script writes a placeholder and does not start the
-  service.
+`pushbot init` writes `/etc/pushbot/config.yml`, creates `/srv/apps`, starts the
+service and waits until the daemon answers `/healthz`. Before writing anything it
+looks up every `allow` owner on GitHub, so a misspelled owner is an error here,
+not a service that fails to start.
 
-Check that the daemon answers locally:
-
-```sh
-curl -fsS http://127.0.0.1:9800/healthz   # prints: ok
-```
-
-On start, pushbot looks up the `allow` owners on GitHub before it listens, which
-can take a few seconds. If `/healthz` still fails after that, read
-`sudo journalctl -u pushbot -n 50`: a misspelled owner stops the service.
+- Always pass flags. Without them `init` runs an interactive wizard, which needs
+  a terminal you do not have.
+- Repeat `--allow` for more patterns: `--allow 'alice/*' --allow 'my-org/homelab-*'`.
+- Other flags: `--listen` (default `127.0.0.1:9800`), `--projects-root` (default
+  `/srv/apps`), `--metrics-listen` (Prometheus, off by default).
+- If the config already exists, `init` with flags refuses without `--force`. See
+  [Maintenance](#maintenance) before changing it.
+- If `init` fails after the restart, read `sudo journalctl -u pushbot -n 50`.
+- `init` exists since v1.5.0. If the server has an older pushbot, run
+  `sudo pushbot upgrade` first.
 
 ## 3. Reverse proxy
 
@@ -141,8 +140,7 @@ proxy to that:
 
 ```sh
 ip -4 addr show docker0           # usually 172.17.0.1
-# in /etc/pushbot/config.yml:  listen: 172.17.0.1:9800
-sudo systemctl restart pushbot
+sudo pushbot init --force --listen 172.17.0.1:9800
 ```
 
 If the container still cannot connect, a host firewall (ufw, firewalld) may be
@@ -177,20 +175,26 @@ and which repositories `allow` admits. To connect a repository, follow
 
 ## Maintenance
 
-- **Allow more repositories:** add a pattern to `allow` in
-  `/etc/pushbot/config.yml`. Patterns are `owner/repo-glob`; the owner is
-  literal, the repository name is a glob. Before restarting, run
-  `sudo pushbot doctor`: it reads the edited file and catches a misspelled owner,
-  which would stop the service on restart (and fail every project's deploys).
-  Then `sudo systemctl restart pushbot` and check `systemctl is-active pushbot`.
+- **Change settings** with `sudo pushbot init --force` and the flags to change.
+  Settings you do not name are kept. `init` checks the owners on GitHub, keeps the
+  previous file as `config.yml.bak` and restarts the service.
+- **Allow more repositories:** `--allow` replaces the whole list, so read the
+  current `allow` in `/etc/pushbot/config.yml` and pass every pattern, old and new:
+  `sudo pushbot init --force --allow 'alice/*' --allow 'my-org/homelab-*'`.
+  Patterns are `owner/repo-glob`; the owner is literal, the repository name is a
+  glob.
 - **Upgrade:** `sudo pushbot upgrade` (latest release) or
   `sudo pushbot upgrade --version v1.3.0` (a specific one, e.g. to roll back). It
   keeps the config, and the restart waits for running deploys. Versions before
   v1.2.0 have no `upgrade`: run the install command again.
-- **Restart after any config change:** `sudo systemctl restart pushbot`. It waits
-  for running deploys, up to 16 minutes. If your command times out meanwhile, check
-  `systemctl status pushbot` instead of restarting again.
-- **Other settings** in `/etc/pushbot/config.yml`, with their defaults:
+- **Restarts wait for running deploys,** up to 16 minutes, both
+  `sudo systemctl restart pushbot` and `pushbot init`. If your command times out
+  meanwhile, check `systemctl status pushbot` instead of restarting again.
+- **Editing the file by hand** works too. Run `sudo pushbot doctor` before
+  restarting: it reads the edited file and catches a misspelled owner, which would
+  stop the service on restart (and fail every project's deploys). Then
+  `sudo systemctl restart pushbot` and check `systemctl is-active pushbot`.
+- **Other settings** (no flags for them, edit the file), with their defaults:
   `deploy_timeout: 15m`, `max_bundle_size: 50MB`, `max_unpacked_size: 200MB`,
   `log_retention: 20`, `audience: pushbot`, `metrics_listen` (Prometheus, off by
   default). Raising `deploy_timeout` means raising the proxy timeout too.

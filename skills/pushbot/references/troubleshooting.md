@@ -72,7 +72,7 @@ before:
 
 | Code | Reason | Cause | Fix |
 |---|---|---|---|
-| 403 | `forbidden: repository <owner>/<repo> is not in the allow list` | The server does not admit this repository. | On the server, add a pattern to `allow` in `/etc/pushbot/config.yml`, check it with `sudo pushbot doctor`, then `sudo systemctl restart pushbot` (see [install-server.md](install-server.md#maintenance)). |
+| 403 | `forbidden: repository <owner>/<repo> is not in the allow list` | The server does not admit this repository. | On the server, add a pattern to `allow` with `sudo pushbot init --force`, passing every pattern because `--allow` replaces the list (see [install-server.md](install-server.md#maintenance)). |
 | 403 | `forbidden: project name is taken by another repository: "<name>" belongs to <owner>/<repo>` | Another repository deployed under this name first. | Set another `name` in `pushbot.yml`. If the old repository is gone, release the name on the server (see [install-server.md](install-server.md#maintenance)). |
 | 401 | `unauthorized: oidc: expected audience "<a>" got ["<b>"]` | The action's `audience` input differs from the daemon's `audience` setting. | Make them equal; the default is `pushbot` on both sides. |
 | 401 | `unauthorized: oidc: token is expired ...` or `... before the nbf (not before) time ...` | The server clock is wrong. | Enable time sync on the server: `sudo timedatectl set-ntp true`. `doctor` checks the clock. |
