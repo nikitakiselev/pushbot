@@ -1,0 +1,16 @@
+{
+  "name": "pushbot",
+  "description": "pushbot skill for AI agents: connect a repository, install the daemon, debug deploys",
+  "owner": {
+    "name": "Nikita Kiselev",
+    "url": "https://github.com/nikitakiselev"
+  },
+  "plugins": [
+    {
+      "name": "pushbot",
+      "source": "./",
+      "description": "Deploy docker compose projects from GitHub Actions with pushbot: connect a repository, install the daemon, debug failed deploys",
+      "homepage": "https://github.com/nikitakiselev/pushbot"
+    }
+  ]
+}
