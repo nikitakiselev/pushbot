@@ -120,12 +120,19 @@ files:
   - deploy/compose.yml: compose.yml   # "src: dest" renames on the server
   - deploy/nginx.conf: nginx.conf
   - config/                           # a whole directory
+env:
+  file: deploy/production.env         # plain settings, copied into .env as is
+  secrets: [DB_PASSWORD]              # GitHub secrets, by name
 ```
 
 - **`files`:** each entry is a `path` (same path on the server) or a single
   `src: dest` pair. `dir/` copies a directory; `dir/: .` copies its contents into
   the project root. Paths are relative, without `..`; symlinks are not supported;
   `.env` is not allowed. The packed files must stay under 50 MB.
+- **`env`:** where `.env` comes from besides the action's `env` input (see
+  [section 6](#6-secrets-and-settings)). `file` is a dotenv file in the repository,
+  copied into `.env` as is: quotes, `${VAR}` and comments work as compose reads
+  them. `secrets` lists GitHub secret names; the action sends only these.
 - **`name`:** optional, defaults to the lower-cased repository name, which becomes
   `/srv/apps/<name>`. Set it only when the user wants another name or the
   repository name does not match `^[a-z0-9][a-z0-9._-]{0,62}$`.
@@ -141,6 +148,28 @@ files:
     - run: docker compose pull
     - run: docker compose run --rm app ./migrate
     - run: docker compose up -d --remove-orphans
+  ```
+
+- **`environments`:** only for several GitHub environments (staging and
+  production) from one manifest. The job's `environment:` picks the block, which
+  can override `name`, `files`, `env.file` and `env.secrets`; steps are shared.
+  With `environments` set, the job's environment must be listed
+  (`production: {}` for one without overrides), and environments on one server
+  need distinct `name`s:
+
+  ```yaml
+  # pushbot.yml
+  name: my-app
+  files: [compose.yml]
+  env:
+    file: deploy/production.env
+    secrets: [DB_PASSWORD]
+  environments:
+    production: {}
+    staging:
+      name: my-app-staging
+      env:
+        file: deploy/staging.env
   ```
 
 - **No other keys.** pushbot rejects unknown keys.
@@ -181,9 +210,9 @@ jobs:
       - uses: nikitakiselev/pushbot@v1
         with:
           url: https://pushbot.example.com
+          secrets: ${{ toJSON(secrets) }}   # the action sends only those in env.secrets
           env: |
             IMAGE_TAG=${{ github.sha }}
-            DB_PASSWORD=${{ secrets.DB_PASSWORD }}
 ```
 
 Check every point:
@@ -203,10 +232,12 @@ Check every point:
   build both architectures on one runner, add `docker/setup-qemu-action@v3` and
   `docker/setup-buildx-action@v3` before the build and set
   `platforms: linux/amd64,linux/arm64`.
-- **`env` lists every variable the compose file needs,** one `KEY=VALUE` per line.
-  It replaces `.env` completely. Values cannot contain `'`. A value cannot span
-  lines: each line is a separate entry, so a multi-line secret (a PEM key)
-  breaks the deploy. Store it base64-encoded and decode it in the application.
+- **Every variable the compose file needs comes from exactly one source:**
+  `env` (one `KEY=VALUE` per line, for values computed in CI), `env.secrets` or
+  `env.file`. Together they replace `.env` completely. `env` and secret values are
+  taken literally: no surrounding quotes and no `${VAR}` (both are rejected), no
+  `'`, no line breaks. Store a multi-line secret (a PEM key) base64-encoded and
+  decode it in the application.
 - **Private images:** by default the action sends the job's `github.token`, and
   the server pulls from ghcr.io with it while the job runs. That needs
   `packages: read` or `write` in the job running the pushbot step. An image
@@ -219,9 +250,9 @@ Check every point:
   `id-token: write` and `needs:` on the build job.
 - **Several built services:** one `docker/build-push-action` step per image, with
   `context:` and `file:` set for each.
-- **`environment: production` is optional.** It lets the user keep secrets in a
-  GitHub environment with protection rules. Without it, secrets come from the
-  repository.
+- **`environment: production` is optional** unless `pushbot.yml` has
+  `environments`. It lets the user keep secrets in a GitHub environment with
+  protection rules. Without it, secrets come from the repository.
 - **Do not trigger the deploy on `pull_request`.** Every pull request would deploy
   to production.
 
@@ -229,18 +260,24 @@ Check every point:
 
 Show the user every variable: its name, what it is, and whether it is a secret.
 
-- **Secrets:** the user sets the values. Do not ask for them in the chat. They run
+- **Secrets:** list their names in `env.secrets`, and pass
+  `secrets: ${{ toJSON(secrets) }}` to the pushbot step. The user sets the values.
+  Do not ask for them in the chat. They run
   `gh secret set DB_PASSWORD` in their own terminal, or use Settings → Secrets and
   variables → Actions. `gh` prompts for the value only in a terminal; without one
   it reads stdin and can store an empty value. Repository secrets work with or
   without `environment:`. To store a secret in the environment instead
   (`--env production`), the environment must exist first: Settings →
   Environments, or `gh api -X PUT repos/{owner}/{repo}/environments/production`.
-- **Plain settings:** write them into `env` directly (`LOG_LEVEL=info`) or keep
-  them in repository variables (`LOG_LEVEL=${{ vars.LOG_LEVEL }}`).
+- **Plain settings:** put them into the `env.file` dotenv file in the repository
+  (`deploy/production.env`), where they get history and review. Keep secrets out
+  of it: its values are not masked in the server logs. An existing
+  `.env.example` is a good start; dotenv syntax (`APP_NAME="My app"`,
+  `MAIL_FROM_NAME="${APP_NAME}"`) works there as locally. A file may refer to
+  secrets and `env` values, which come first in `.env`.
 - **Check that every secret exists** with `gh secret list` (and
-  `gh secret list --env production`). A missing secret silently becomes an empty
-  value.
+  `gh secret list --env production`). The action fails before the deploy when a
+  secret from `env.secrets` is missing, but a secret stored empty passes.
 
 ## 7. Deploy and verify
 
@@ -275,6 +312,6 @@ When anything fails, go to [troubleshooting.md](troubleshooting.md).
 - [ ] images are tagged `${{ github.sha }}`, names are lower case, the architecture matches the server
 - [ ] the compose file on the server has no `build:`; it uses `${IMAGE_TAG}`
 - [ ] every bind-mounted repository file is in `files`
-- [ ] every variable is in `env` and reaches the containers (`environment:` or `env_file: .env`); every secret exists in GitHub
+- [ ] every variable comes from one of `env`, `env.secrets`, `env.file` and reaches the containers (`environment:` or `env_file: .env`); every secret exists in GitHub
 - [ ] an existing deployment on the server is stopped or taken over, its data kept
 - [ ] the deploy ends with `PUSHBOT: success` and the application answers
