@@ -63,6 +63,8 @@ jobs:
           registry-auth: "false"
           env: |
             GREETING=hello
+          # Stands in for ${{ toJSON(secrets) }}: the repository has no secrets to test with.
+          secrets: '{"E2E_SECRET": "s3cret", "UNUSED": "x"}'
 
       - name: Check the deployed project
         run: |
@@ -70,6 +72,9 @@ jobs:
           test "$(cat "$dir/greeting.txt")" = "files ok"
           test "$(cat "$dir/hello.txt")" = "hello from $GITHUB_SHA"
           grep -qx "GREETING='hello'" "$dir/.env"
+          grep -qx "E2E_SECRET='s3cret'" "$dir/.env"
+          grep -qx 'APP_NAME="pushbot e2e"' "$dir/.env"
+          ! grep -q UNUSED "$dir/.env"
 
       - name: Daemon log
         if: always()

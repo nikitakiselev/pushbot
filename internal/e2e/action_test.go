@@ -116,7 +116,7 @@ steps:
 		"docker-compose.yml":   "services: {}\n",
 		"config/app.conf":      "a=1\n",
 		"compose.override.yml": "prod\n",
-		".env":                 "IMAGE_TAG='v1'\nSECRET='hunter22'\n",
+		".env":                 "# pushbot: env input\nIMAGE_TAG='v1'\nSECRET='hunter22'\n",
 	} {
 		if got, err := os.ReadFile(filepath.Join(dir, name)); err != nil || string(got) != want {
 			t.Errorf("%s = %q, %v; want %q", name, got, err, want)
@@ -124,6 +124,81 @@ steps:
 	}
 	if _, err := os.Stat(filepath.Join(dir, "not-listed.txt")); err == nil {
 		t.Error("a file not listed in files was deployed")
+	}
+}
+
+// secretsJSON emulates ${{ toJSON(secrets) }}: GitHub upper-cases secret names.
+const secretsJSON = `{"github_token": "ghs_job", "DB_PASSWORD": "hunter22", "STAGING_ONLY": "s3cret", "UNUSED": "x"}`
+
+func TestActionEnvSources(t *testing.T) {
+	h := newHarness(t)
+	h.write(t, "pushbot.yml", `
+files: [docker-compose.yml]
+env:
+  file: deploy/production.env
+  secrets: [db_password]
+steps:
+  - run: echo "tag=$IMAGE_TAG"
+`)
+	h.write(t, "docker-compose.yml", "services: {}\n")
+	h.write(t, "deploy/production.env", "APP_NAME=\"mBlog\"\n")
+
+	out, err := h.action(t, "PUSHBOT_ENV=IMAGE_TAG=v1", "PUSHBOT_SECRETS="+secretsJSON)
+	if err != nil {
+		t.Fatalf("action failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "pushbot: secrets db_password\n") {
+		t.Errorf("output lacks the secrets line:\n%s", out)
+	}
+	if strings.Contains(out, "pushbot: environment") {
+		t.Errorf("output mentions an environment for a job without one:\n%s", out)
+	}
+	want := "# pushbot: env input\nIMAGE_TAG='v1'\n" +
+		"# pushbot: secrets\ndb_password='hunter22'\n" +
+		"# pushbot: deploy/production.env\nAPP_NAME=\"mBlog\"\n"
+	if got, _ := os.ReadFile(filepath.Join(h.root, "my-service", ".env")); string(got) != want {
+		t.Errorf(".env = %q, want %q", got, want)
+	}
+}
+
+func TestActionEnvironment(t *testing.T) {
+	h := newHarness(t)
+	h.write(t, "pushbot.yml", `
+files: [docker-compose.yml]
+env:
+  file: deploy/production.env
+  secrets: [DB_PASSWORD]
+steps:
+  - run: echo "environment=$PUSHBOT_ENVIRONMENT"
+environments:
+  production: {}
+  Staging:
+    name: my-service-staging
+    files: [compose.staging.yml]
+    env:
+      file: deploy/staging.env
+      secrets: [STAGING_ONLY]
+`)
+	h.write(t, "compose.staging.yml", "services: {}\n")
+	h.write(t, "deploy/staging.env", "APP_ENV=staging\n")
+	h.issuer.SetActionsClaims(map[string]any{"environment": "staging"})
+
+	out, err := h.action(t, "PUSHBOT_ENV=", "PUSHBOT_SECRETS="+secretsJSON)
+	if err != nil {
+		t.Fatalf("action failed: %v\n%s", err, out)
+	}
+	for _, want := range []string{"pushbot: environment staging\n", "pushbot: secrets STAGING_ONLY\n", "environment=staging\n"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output lacks %q:\n%s", want, out)
+		}
+	}
+	dir := filepath.Join(h.root, "my-service-staging")
+	want := "# pushbot: secrets\nSTAGING_ONLY='s3cret'\n# pushbot: deploy/staging.env\nAPP_ENV=staging\n"
+	if got, _ := os.ReadFile(filepath.Join(dir, ".env")); string(got) != want {
+		t.Errorf(".env = %q, want %q", got, want)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "compose.staging.yml")); err != nil {
+		t.Errorf("staging files were not deployed: %v", err)
 	}
 }
 
@@ -173,6 +248,41 @@ func TestActionFails(t *testing.T) {
 			name:     "invalid manifest",
 			manifest: "steps: []\n",
 			want:     "HTTP 400",
+		},
+		{
+			name:     "env file missing",
+			manifest: "env:\n  file: deploy/production.env\n",
+			want:     "::error::pushbot: env.file deploy/production.env not found",
+		},
+		{
+			name:     "no secrets input",
+			manifest: "env:\n  secrets: [DB_PASSWORD]\n",
+			want:     "add secrets: ${{ toJSON(secrets) }} to the pushbot step",
+		},
+		{
+			name:     "secret not set",
+			manifest: "env:\n  secrets: [DB_PASSWORD, MISSING]\n",
+			env:      []string{"PUSHBOT_SECRETS=" + secretsJSON},
+			want:     "::error::pushbot: secret MISSING is not set in GitHub: gh secret set MISSING\n",
+		},
+		{
+			name:     "secret not set in environment",
+			manifest: "env:\n  secrets: [MISSING]\n",
+			claims:   map[string]any{"environment": "staging"},
+			env:      []string{"PUSHBOT_SECRETS=" + secretsJSON},
+			want:     "::error::pushbot: secret MISSING is not set in GitHub (environment staging): gh secret set MISSING --env staging\n",
+		},
+		{
+			name:     "secrets input is not json",
+			manifest: "env:\n  secrets: [DB_PASSWORD]\n",
+			env:      []string{"PUSHBOT_SECRETS=nope"},
+			want:     "the secrets input is not a JSON object",
+		},
+		{
+			name:     "environment not listed",
+			manifest: "environments:\n  production: {}\n",
+			claims:   map[string]any{"environment": "stagng"},
+			want:     `environment "stagng" is not listed`,
 		},
 	}
 	for _, c := range cases {

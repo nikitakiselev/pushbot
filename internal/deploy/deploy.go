@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -63,11 +64,15 @@ type Registry struct {
 // Request is a parsed, authenticated deploy request.
 type Request struct {
 	Claims     *auth.Claims
-	Manifest   *manifest.Manifest
-	Env        []envfile.Var
-	BundlePath string // "" when no files were sent
+	Manifest   *manifest.Manifest // as sent; Prepare applies the job's environment
+	Env        []envfile.Var      // the action's env input
+	Secrets    map[string]string  // GitHub secrets sent by the action; nil when none
+	BundlePath string             // "" when no files were sent
 	Registry   *Registry
 }
+
+// maxEnvFile bounds env.file, like the env input.
+const maxEnvFile = 64 << 10
 
 // Result of a deploy.
 type Result struct {
@@ -126,10 +131,14 @@ func New(cfg Config) (*Deployer, error) {
 type Job struct {
 	d         *Deployer
 	req       Request
+	m         *manifest.Manifest // req.Manifest for the job's environment
 	name      string
 	dir       string
 	tmpDir    string
 	copies    []copyOp
+	env       envfile.Content
+	fileKeys  int      // number of keys in env.file
+	warnings  []string // about env values, for the deploy log
 	dirExists bool
 	claimed   bool // the name was claimed by this deploy
 	cleanOnce sync.Once
@@ -138,14 +147,18 @@ type Job struct {
 // Prepare validates the request, extracts the bundle and claims the project name.
 // Errors wrap ErrBadRequest or ErrForbidden when caused by the request.
 func (d *Deployer) Prepare(req Request) (*Job, error) {
-	name := req.Manifest.Name
+	m, err := req.Manifest.ForEnvironment(req.Claims.Environment)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrBadRequest, err)
+	}
+	name := m.Name
 	if name == "" {
 		name = manifest.DefaultName(req.Claims.Repository)
 		if err := manifest.ValidateName(name); err != nil {
 			return nil, fmt.Errorf("%w: %v; set name in pushbot.yml", ErrBadRequest, err)
 		}
 	}
-	j := &Job{d: d, req: req, name: name, dir: filepath.Join(d.cfg.ProjectsRoot, name)}
+	j := &Job{d: d, req: req, m: m, name: name, dir: filepath.Join(d.cfg.ProjectsRoot, name)}
 
 	tmpDir, err := os.MkdirTemp(filepath.Join(d.cfg.StateDir, "tmp"), "deploy-*")
 	if err != nil {
@@ -153,6 +166,10 @@ func (d *Deployer) Prepare(req Request) (*Job, error) {
 	}
 	j.tmpDir = tmpDir
 	if err := j.extract(); err != nil {
+		j.Cleanup()
+		return nil, err
+	}
+	if err := j.prepareEnv(); err != nil {
 		j.Cleanup()
 		return nil, err
 	}
@@ -187,12 +204,104 @@ func (j *Job) extract() error {
 			return fmt.Errorf("%w: %v", ErrBadRequest, err)
 		}
 	}
-	copies, err := planCopies(bundleDir, j.req.Manifest.Files)
+	copies, err := planCopies(bundleDir, j.m.Files)
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrBadRequest, err)
 	}
 	j.copies = copies
 	return nil
+}
+
+// prepareEnv collects the .env sources from the request and the extracted
+// bundle and checks them: declared secrets, one source per key, values.
+func (j *Job) prepareEnv() error {
+	c := envfile.Content{Env: j.req.Env}
+	declared := map[string]bool{}
+	for _, name := range j.m.Env.Secrets {
+		declared[name] = true
+		value, ok := j.req.Secrets[name]
+		if !ok {
+			return fmt.Errorf("%w: secret %s is declared in pushbot.yml but was not sent", ErrBadRequest, name)
+		}
+		c.Secrets = append(c.Secrets, envfile.Var{Key: name, Value: value})
+	}
+	var sent []string
+	for name := range j.req.Secrets {
+		sent = append(sent, name)
+	}
+	sort.Strings(sent)
+	for _, name := range sent {
+		if !declared[name] {
+			return fmt.Errorf("%w: secret %s was sent but is not declared in env.secrets", ErrBadRequest, name)
+		}
+	}
+
+	var fileKeys []string
+	if f := j.m.Env.File; f != "" {
+		data, err := readEnvFile(filepath.Join(j.tmpDir, "bundle", filepath.FromSlash(f)))
+		if err != nil {
+			return fmt.Errorf("%w: env.file %s: %v", ErrBadRequest, f, err)
+		}
+		if fileKeys, err = envfile.FileKeys(data); err != nil {
+			return fmt.Errorf("%w: %s %v", ErrBadRequest, f, err)
+		}
+		c.FileName, c.File = f, data
+	}
+
+	source := map[string]string{}
+	var keys []string
+	add := func(key, from string) error {
+		if prev, ok := source[key]; ok {
+			return fmt.Errorf("%w: %s is set both in %s and in %s; keep one", ErrBadRequest, key, prev, from)
+		}
+		source[key] = from
+		keys = append(keys, key)
+		return nil
+	}
+	for _, v := range c.Env {
+		if err := add(v.Key, "env"); err != nil {
+			return err
+		}
+	}
+	for _, v := range c.Secrets {
+		if err := add(v.Key, "secrets"); err != nil {
+			return err
+		}
+	}
+	for _, k := range fileKeys {
+		if err := add(k, c.FileName); err != nil {
+			return err
+		}
+	}
+
+	warnings, err := envfile.Check(rawVars(c), keys)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrBadRequest, err)
+	}
+	j.env, j.fileKeys, j.warnings = c, len(fileKeys), warnings
+	return nil
+}
+
+// rawVars are the values taken as is: the env input and secrets.
+func rawVars(c envfile.Content) []envfile.Var {
+	return append(append([]envfile.Var{}, c.Env...), c.Secrets...)
+}
+
+func readEnvFile(file string) ([]byte, error) {
+	info, err := os.Lstat(file)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, errors.New("not in the bundle")
+	}
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, errors.New("not a regular file")
+	}
+	if info.Size() > maxEnvFile {
+		return nil, fmt.Errorf("larger than %d KB", maxEnvFile>>10)
+	}
+	return os.ReadFile(file)
 }
 
 // Cleanup removes the job's temporary files (extracted bundle, docker config).
@@ -218,7 +327,7 @@ func (j *Job) Run(w io.Writer) Result {
 	if len(sha7) > 7 {
 		sha7 = sha7[:7]
 	}
-	out := &output{client: w, clientOK: true, mask: envfile.NewMasker(j.req.Env)}
+	out := &output{client: w, clientOK: true, mask: envfile.NewMasker(rawVars(j.env))}
 	logDir := filepath.Join(j.d.cfg.StateDir, "logs", j.name)
 	if f, err := createLogFile(logDir, start, sha7); err != nil {
 		j.d.cfg.Logger.Error("cannot create deploy log", "project", j.name, "err", err)
@@ -250,7 +359,11 @@ func (j *Job) Run(w io.Writer) Result {
 
 func (j *Job) run(ctx context.Context, out *output, sha7 string) Result {
 	c := j.req.Claims
-	out.linef("==> %s@%s (run #%s) → %s", c.Repository, sha7, c.RunID, j.dir)
+	runInfo := "run #" + c.RunID
+	if c.Environment != "" {
+		runInfo += ", environment " + c.Environment
+	}
+	out.linef("==> %s@%s (%s) → %s", c.Repository, sha7, runInfo, j.dir)
 	if j.claimed {
 		out.linef("==> project name %q is now bound to %s", j.name, c.Repository)
 		if j.dirExists {
@@ -274,16 +387,19 @@ func (j *Job) run(ctx context.Context, out *output, sha7 string) Result {
 		}
 	}
 
-	if err := envfile.Write(filepath.Join(j.dir, ".env"), j.req.Env); err != nil {
+	if err := envfile.Write(filepath.Join(j.dir, ".env"), j.env); err != nil {
 		return Result{Reason: "write .env: " + err.Error()}
 	}
 	out.linef("==> .env: %s", j.envSummary())
+	for _, w := range j.warnings {
+		out.linef("==> warning: %s", w)
+	}
 
 	env, err := j.stepEnv()
 	if err != nil {
 		return Result{Reason: "registry auth: " + err.Error()}
 	}
-	steps := j.req.Manifest.Steps
+	steps := j.m.Steps
 	for i, s := range steps {
 		label := fmt.Sprintf("[%d/%d]", i+1, len(steps))
 		out.linef("==> %s %s", label, summary(s.Run))
@@ -324,15 +440,17 @@ func (d *Deployer) lock(ctx context.Context, name string, onWait func()) (func()
 }
 
 // stepEnv builds the complete step environment; PUSHBOT_* come last so env
-// input cannot override them.
+// input and secrets cannot override them. Values from env.file are not
+// interpreted by pushbot, so steps get them only through .env.
 func (j *Job) stepEnv() ([]string, error) {
 	c := j.req.Claims
 	env := []string{"PATH=" + StepPath, "HOME=" + j.d.cfg.StateDir}
-	for _, v := range j.req.Env {
+	for _, v := range rawVars(j.env) {
 		env = append(env, v.Key+"="+v.Value)
 	}
 	env = append(env,
 		"PUSHBOT_PROJECT="+j.name,
+		"PUSHBOT_ENVIRONMENT="+c.Environment,
 		"PUSHBOT_REPOSITORY="+c.Repository,
 		"PUSHBOT_SHA="+c.SHA,
 		"PUSHBOT_REF="+c.Ref,
@@ -363,11 +481,11 @@ func writeDockerConfig(dir string, r *Registry) error {
 }
 
 func (j *Job) filesSummary() string {
-	if len(j.req.Manifest.Files) == 0 {
+	if len(j.m.Files) == 0 {
 		return "none"
 	}
 	var names []string
-	for _, f := range j.req.Manifest.Files {
+	for _, f := range j.m.Files {
 		name := f.Src
 		if info, err := os.Stat(filepath.Join(j.tmpDir, "bundle", filepath.FromSlash(f.Src))); err == nil && info.IsDir() {
 			name += "/"
@@ -380,15 +498,34 @@ func (j *Job) filesSummary() string {
 	return fmt.Sprintf("%s (%d files)", strings.Join(names, ", "), len(j.copies))
 }
 
+// envSummary lists the .env keys by source; with the env input alone it is
+// just the keys, as before env files and secrets existed.
 func (j *Job) envSummary() string {
-	if len(j.req.Env) == 0 {
-		return "empty"
+	keys := func(vars []envfile.Var) string {
+		names := make([]string, len(vars))
+		for i, v := range vars {
+			names[i] = v.Key
+		}
+		return strings.Join(names, ", ")
 	}
-	keys := make([]string, len(j.req.Env))
-	for i, v := range j.req.Env {
-		keys[i] = v.Key
+	c := j.env
+	if len(c.Secrets) == 0 && c.FileName == "" {
+		if len(c.Env) == 0 {
+			return "empty"
+		}
+		return keys(c.Env)
 	}
-	return strings.Join(keys, ", ")
+	var parts []string
+	if len(c.Env) > 0 {
+		parts = append(parts, "env "+keys(c.Env))
+	}
+	if len(c.Secrets) > 0 {
+		parts = append(parts, "secrets "+keys(c.Secrets))
+	}
+	if c.FileName != "" {
+		parts = append(parts, fmt.Sprintf("%s (%d keys)", c.FileName, j.fileKeys))
+	}
+	return strings.Join(parts, "; ")
 }
 
 type noObserver struct{}

@@ -124,6 +124,22 @@ func TestDeployOK(t *testing.T) {
 	}
 }
 
+func TestDeploySecrets(t *testing.T) {
+	ts := newTestServer(t, 1<<20)
+	resp := ts.post(t, ts.issuer.Token(t, nil),
+		field{"manifest", "env:\n  secrets: [DB_PASSWORD]\nsteps:\n  - run: 'true'"},
+		field{"secrets", `{"DB_PASSWORD": "it is hunter2"}`},
+	)
+	out := readAll(t, resp.Body)
+	if resp.StatusCode != http.StatusOK || !strings.Contains(out, "\nPUSHBOT: success (") {
+		t.Fatalf("status %d, output:\n%s", resp.StatusCode, out)
+	}
+	got, _ := os.ReadFile(filepath.Join(ts.root, "my-service", ".env"))
+	if want := "# pushbot: secrets\nDB_PASSWORD='it is hunter2'\n"; string(got) != want {
+		t.Errorf(".env = %q, want %q", got, want)
+	}
+}
+
 func TestDeployFailureIsReportedInBody(t *testing.T) {
 	ts := newTestServer(t, 1<<20)
 	resp := ts.post(t, ts.issuer.Token(t, nil), field{"manifest", "steps:\n  - run: exit 7"})
@@ -171,7 +187,10 @@ func TestDeployRejections(t *testing.T) {
 		{"no manifest", ts.issuer.Token(t, nil), []field{{"env", "A=1"}}, 400},
 		{"bad manifest", ts.issuer.Token(t, nil), []field{{"manifest", "nmae: x"}}, 400},
 		{"bad env", ts.issuer.Token(t, nil), []field{m, {"env", "not env"}}, 400},
-		{"unknown field", ts.issuer.Token(t, nil), []field{m, {"secrets", "x"}}, 400},
+		{"unknown field", ts.issuer.Token(t, nil), []field{m, {"nonsense", "x"}}, 400},
+		{"secrets not json", ts.issuer.Token(t, nil), []field{m, {"secrets", "A=1"}}, 400},
+		{"secret not a string", ts.issuer.Token(t, nil), []field{m, {"secrets", `{"A": 1}`}}, 400},
+		{"secret not declared", ts.issuer.Token(t, nil), []field{m, {"secrets", `{"A": "1"}`}}, 400},
 		{"half registry", ts.issuer.Token(t, nil), []field{m, {"registry_user", "me"}}, 400},
 		{"missing file", ts.issuer.Token(t, nil), []field{{"manifest", "files: [a.yml]"}}, 400},
 		{"bundle too big", ts.issuer.Token(t, nil), []field{m, {"bundle", string(random)}}, 413},

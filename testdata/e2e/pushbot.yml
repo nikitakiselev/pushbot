@@ -2,6 +2,9 @@
 name: pushbot-e2e
 files:
   - testdata/e2e/greeting.txt: greeting.txt
+env:
+  file: testdata/e2e/app.env
+  secrets: [E2E_SECRET]
 steps:
   - run: echo "$GREETING from $PUSHBOT_SHA" > hello.txt
   - run: cat greeting.txt hello.txt

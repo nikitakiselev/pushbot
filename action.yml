@@ -9,7 +9,13 @@ inputs:
     description: Base URL of the pushbot daemon, e.g. https://pushbot.example.com
     required: true
   env:
-    description: KEY=VALUE lines written to .env in the project directory.
+    description: KEY=VALUE lines written to .env in the project directory, values taken as is.
+    required: false
+    default: ""
+  secrets:
+    description: >-
+      All secrets of the job as JSON (the expression toJSON(secrets)), needed when
+      pushbot.yml lists env.secrets. Only the secrets listed there are sent to the server.
     required: false
     default: ""
   config:
@@ -33,6 +39,7 @@ runs:
       env:
         PUSHBOT_URL: ${{ inputs.url }}
         PUSHBOT_ENV: ${{ inputs.env }}
+        PUSHBOT_SECRETS: ${{ inputs.secrets }}
         PUSHBOT_CONFIG: ${{ inputs.config }}
         PUSHBOT_REGISTRY_AUTH: ${{ inputs.registry-auth }}
         PUSHBOT_AUDIENCE: ${{ inputs.audience }}

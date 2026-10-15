@@ -175,6 +175,8 @@ systemd-юнит и перезапускает сервис (перезапус�
 # pushbot.yml
 files:
   - docker-compose.yml
+env:
+  secrets: [DB_PASSWORD]
 ```
 
 **2. Шаг в workflow:**
@@ -203,12 +205,12 @@ jobs:
       - uses: nikitakiselev/pushbot@v1
         with:
           url: https://pushbot.example.com
+          secrets: ${{ toJSON(secrets) }}
           env: |
             IMAGE_TAG=${{ github.sha }}
-            DB_PASSWORD=${{ secrets.DB_PASSWORD }}
 ```
 
-`env` превращается в файл `.env` рядом с `docker-compose.yml` на сервере; compose
+Из этого получается файл `.env` рядом с `docker-compose.yml` на сервере; compose
 читает его сам. В примере:
 
 - `IMAGE_TAG` — тег только что собранного образа. В `docker-compose.yml` укажите
@@ -216,11 +218,13 @@ jobs:
   коммита. GHCR принимает имена только в нижнем регистре: если в имени владельца или
   репозитория есть заглавные буквы, впишите имя образа в нижнем регистре и здесь, и
   в `tags`.
-- `DB_PASSWORD` — пример секрета: добавьте его в репозитории в Settings → Secrets and
-  variables → Actions (или в окружение `production`) и используйте в compose как
-  `${DB_PASSWORD}`.
+- `DB_PASSWORD` — секрет: задайте его один раз командой
+  `gh secret set DB_PASSWORD --env production` (или в Settings → Environments →
+  production) и используйте в compose как `${DB_PASSWORD}`. Action отправляет на
+  сервер только секреты, перечисленные в `env.secrets`.
 
-Перечислите переменные, которые нужны вашему compose; если не нужны — уберите `env`.
+Несекретные настройки удобнее держать файлом в репозитории — см.
+[Переменные окружения](#переменные-окружения).
 
 **3. Push.** Проект появится в `/srv/apps/<имя репозитория>`.
 
@@ -236,9 +240,20 @@ files:                    # что положить в /srv/apps/<name>
   - deploy/compose.prod.yml: compose.yml     # с переименованием
   - deploy/: .                               # содержимое директории в корень проекта
 
+env:                      # необязательно; см. «Переменные окружения»
+  file: deploy/production.env                # несекретные настройки, как есть
+  secrets: [APP_KEY, DB_PASSWORD]            # имена секретов GitHub
+
 steps:                    # необязательно; по умолчанию:
   - run: docker compose pull
   - run: docker compose up -d --remove-orphans
+
+environments:             # необязательно; см. «Окружения»
+  production: {}
+  staging:
+    name: my-service-staging
+    env:
+      file: deploy/staging.env
 ```
 
 Порядок деплоя: файлы из `files` → `.env` → шаги по очереди.
@@ -246,23 +261,118 @@ steps:                    # необязательно; по умолчанию:
 - **Файлы** перезаписываются, но **ничего не удаляется**: данные контейнеров в
   директории проекта (`./data` и т. п.) в безопасности. Пути относительные, без `..`;
   symlink'и не поддерживаются.
-- **`.env`** целиком перезаписывается значениями из входа `env` (права `0600`,
-  значения в одинарных кавычках, чтобы compose не подставлял `$`). Указывать `.env`
-  в `files` нельзя.
+- **`.env`** целиком перезаписывается при каждом деплое (права `0600`), см.
+  [Переменные окружения](#переменные-окружения). Указывать `.env` в `files` нельзя.
 - **Шаги** выполняются как `sh -e -c '<run>'` в директории проекта, первая ошибка
-  останавливает деплой. В окружении — переменные из `env` и `PUSHBOT_PROJECT`,
-  `PUSHBOT_REPOSITORY`, `PUSHBOT_SHA`, `PUSHBOT_REF`, `PUSHBOT_ACTOR`,
-  `PUSHBOT_RUN_ID`, `PUSHBOT_RUN_URL`. Окружение демона не наследуется.
+  останавливает деплой. В окружении — переменные из входа `env` и секретов, а также
+  `PUSHBOT_PROJECT`, `PUSHBOT_ENVIRONMENT`, `PUSHBOT_REPOSITORY`, `PUSHBOT_SHA`,
+  `PUSHBOT_REF`, `PUSHBOT_ACTOR`, `PUSHBOT_RUN_ID`, `PUSHBOT_RUN_URL`. Окружение
+  демона не наследуется.
 
 Автоматического отката нет: чтобы откатиться, перезапустите workflow для
 предыдущего коммита.
+
+## Переменные окружения
+
+`.env` собирается из трёх источников:
+
+| Источник | Где задаётся | Что туда класть |
+|---|---|---|
+| Файл из репозитория | `env.file` в `pushbot.yml` | несекретные настройки |
+| Секреты GitHub | имена — `env.secrets` в `pushbot.yml`, значения — GitHub Secrets | пароли, ключи, токены |
+| Вход `env` action | `env:` у шага в workflow | то, что вычисляется в CI, например `IMAGE_TAG` |
+
+```yaml
+# pushbot.yml
+env:
+  file: deploy/production.env
+  secrets: [APP_KEY, DB_PASSWORD]
+```
+
+```sh
+gh secret set APP_KEY --env production
+gh secret set DB_PASSWORD --env production
+```
+
+На сервере получится:
+
+```
+# pushbot: env input
+IMAGE_TAG='a1b2c3d…'
+# pushbot: secrets
+APP_KEY='base64:…'
+DB_PASSWORD='…'
+# pushbot: deploy/production.env
+APP_NAME="My Service"
+DATABASE_URL="mysql://app:${DB_PASSWORD}@db/app"
+```
+
+- **Файл** попадает в `.env` как есть: кавычки, `${…}` и комментарии обрабатывают
+  compose и приложение, так же как локально. Он стоит последним, поэтому может
+  ссылаться на секреты и `env`. Секреты в него не кладите: его значения не
+  маскируются в логах.
+- **Секреты и `env`** берутся буквально и пишутся в одинарных кавычках, чтобы compose
+  не подставлял `$`; экранировать ничего не нужно. Значения с `'` и переводами строк
+  не поддерживаются. Значение целиком в двойных кавычках или `${KEY}` с ключом из
+  любого источника — ошибка: это скопированный dotenv-синтаксис, такую переменную
+  перенесите в файл. На `$$` pushbot предупреждает в логе: он останется `$$`.
+- **Один ключ — один источник**: ключ, заданный в двух источниках, — ошибка до деплоя.
+- Секреты ищутся без учёта регистра, как в GitHub. Action получает все секреты job'а
+  (`toJSON(secrets)`), но отправляет на сервер только перечисленные в `env.secrets`;
+  если какого-то нет в GitHub, action падает ещё до запроса.
+- Шаги получают в окружении переменные из секретов и `env`. Переменные из файла —
+  только через `.env`: compose читает его сам, в shell-шаге — `set -a; . ./.env; set +a`.
+
+Держите по секрету GitHub на переменную, а не весь `.env` одним секретом: секрет
+нельзя прочитать, и чтобы поменять одну строку, понадобился бы весь файл.
+
+Свои скрипты на сервере (бэкапы и т. п.) пусть читают `.env` через shell, а не
+`grep | cut` — тот вернёт значение вместе с кавычками:
+
+```sh
+DB_PASSWORD="$(. /srv/apps/my-service/.env && printf '%s' "$DB_PASSWORD")"
+```
+
+Это работает, если файл из репозитория тоже совместим с `sh`.
+
+## Окружения
+
+Один `pushbot.yml` может описывать несколько окружений GitHub (`environment:` у
+job), например staging и production:
+
+```yaml
+name: my-service
+files: [docker-compose.yml]
+env:
+  file: deploy/production.env
+  secrets: [APP_KEY, DB_PASSWORD]
+
+environments:
+  production: {}
+  staging:
+    name: my-service-staging
+    env:
+      file: deploy/staging.env
+```
+
+- Окружение pushbot берёт из OIDC-токена job'а, отдельный вход для этого не нужен.
+- В окружении можно переопределить `name`, `files`, `env.file` и `env.secrets`; ключ
+  целиком заменяет значение верхнего уровня. Шаги общие для всех окружений, чтобы
+  staging проверял ту же процедуру деплоя, что и прод; если шаг должен вести себя
+  иначе — проверьте в нём `$PUSHBOT_ENVIRONMENT`.
+- Если `environments` задан, окружение job'а должно быть в списке
+  (`production: {}` — окружение без переопределений), иначе деплой отклоняется.
+- Значения секретов для разных окружений задаются в GitHub Environments под
+  одинаковыми именами: `gh secret set DB_PASSWORD --env staging`.
+- Окружениям на одном сервере нужны разные `name`.
 
 ## Входы action
 
 | Вход | По умолчанию | |
 |---|---|---|
 | `url` | — | адрес pushbot, обязателен |
-| `env` | пусто | строки `KEY=VALUE` для `.env` |
+| `env` | пусто | строки `KEY=VALUE` для `.env`, значения как есть |
+| `secrets` | пусто | `${{ toJSON(secrets) }}`, если в `pushbot.yml` есть `env.secrets` |
 | `config` | `pushbot.yml` | путь к манифесту от корня репозитория |
 | `registry-auth` | `true` | передать временный `github.token`, чтобы сервер мог стянуть приватный образ из ghcr.io |
 | `audience` | `pushbot` | audience OIDC-токена |
@@ -302,8 +412,8 @@ allow:
 - Первый деплой закрепляет имя проекта за репозиторием (по `repository_id`); другой
   репозиторий с тем же `name` получит 403. Освободить имя — удалить запись из
   `/var/lib/pushbot/projects.json`.
-- Значения из `env` маскируются как `***` в логах на сервере; в логе Actions секреты
-  маскирует GitHub.
+- Значения из `env` и секретов маскируются как `***` в логах на сервере, значения из
+  env-файла — нет; в логе Actions секреты маскирует GitHub.
 
 ## Логи
 
