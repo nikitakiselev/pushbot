@@ -78,12 +78,16 @@ func Run(ctx context.Context, o Options, report func(Result)) int {
 	}
 
 	cfg, err := config.Load(o.ConfigPath)
-	if err != nil {
+	noConfig := errors.Is(err, os.ErrNotExist)
+	switch {
+	case noConfig:
+		add(Result{Fail, "config " + o.ConfigPath + " does not exist", "sudo pushbot init"})
+	case err != nil:
 		add(Result{Fail, "config: " + err.Error(), "fix the file, then: sudo systemctl restart pushbot"})
-	} else {
+	default:
 		add(Result{OK, "config " + o.ConfigPath + " is valid", ""})
 	}
-	service, running := checkService(o)
+	service, running := checkService(o, noConfig)
 	add(service)
 	// A stopped service would fail these too; its line already says what to do.
 	if running && cfg != nil {
@@ -115,8 +119,9 @@ func Run(ctx context.Context, o Options, report func(Result)) int {
 	return failures
 }
 
-// checkService also reports whether the service is running.
-func checkService(o Options) (Result, bool) {
+// checkService also reports whether the service is running. Without a config
+// there is nothing to start: pushbot init writes one and starts the service.
+func checkService(o Options, noConfig bool) (Result, bool) {
 	enabled, err := o.Systemctl("is-enabled", "pushbot")
 	if errors.Is(err, exec.ErrNotFound) {
 		return Result{Fail, "systemctl not found: pushbot runs as a systemd service", ""}, false
@@ -130,6 +135,8 @@ func checkService(o Options) (Result, bool) {
 		return Result{OK, "service pushbot is active and enabled", ""}, true
 	case active == "active":
 		return Result{Warn, "service pushbot is " + enabled + " and will not start after a reboot", "sudo systemctl enable pushbot"}, true
+	case active == "inactive" && noConfig:
+		return Result{Fail, "service pushbot is not running", "sudo pushbot init"}, false
 	case active == "inactive":
 		return Result{Fail, "service pushbot is not running", "sudo systemctl start pushbot"}, false
 	default:

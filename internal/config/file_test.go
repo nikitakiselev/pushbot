@@ -147,7 +147,11 @@ func TestReadFileErrors(t *testing.T) {
 }
 
 func TestValidateAllow(t *testing.T) {
-	cases := map[string]bool{"alice/*": true, "My-Org/homelab-*": true, "alice": false, "*/x": false, "a/[": false, "/x": false}
+	cases := map[string]bool{
+		"alice/*": true, "My-Org/homelab-*": true, "alice": false, "*/x": false, "a/[": false, "/x": false,
+		// These would never match a repository name.
+		"alice/* bob/*": false, "alice/a/b": false, "alice/ x": false,
+	}
 	for in, ok := range cases {
 		if err := ValidateAllow(in); (err == nil) != ok {
 			t.Errorf("ValidateAllow(%q) = %v, want ok=%v", in, err, ok)
@@ -156,7 +160,10 @@ func TestValidateAllow(t *testing.T) {
 }
 
 func TestValidateAddress(t *testing.T) {
-	cases := map[string]bool{"127.0.0.1:9800": true, ":9800": true, "[::1]:9800": true, "9800": false, "localhost": false, "host:": false, "": false}
+	cases := map[string]bool{
+		"127.0.0.1:9800": true, ":9800": true, "[::1]:9800": true, ":http": true,
+		"9800": false, "localhost": false, "host:": false, "": false, ":99999": false, ":-1": false,
+	}
 	for in, ok := range cases {
 		if err := ValidateAddress(in); (err == nil) != ok {
 			t.Errorf("ValidateAddress(%q) = %v, want ok=%v", in, err, ok)

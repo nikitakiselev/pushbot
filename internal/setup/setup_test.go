@@ -167,6 +167,23 @@ func TestRunCreatesProjectsRoot(t *testing.T) {
 	}
 }
 
+// Missing parents must stay traversable for the pushbot user.
+func TestRunCreatesProjectsRootParents(t *testing.T) {
+	e := newEnv(t)
+	e.opts.File.ProjectsRoot = filepath.Join(e.dir, "opt", "pushbot", "apps")
+	if err := e.run(t); err != nil {
+		t.Fatal(err)
+	}
+	for _, dir := range []string{filepath.Join(e.dir, "opt"), filepath.Join(e.dir, "opt", "pushbot")} {
+		if info, err := os.Stat(dir); err != nil || info.Mode().Perm() != 0o755 {
+			t.Errorf("%s: %v, %v; want mode 0755", dir, info, err)
+		}
+	}
+	if info, err := os.Stat(e.opts.File.ProjectsRoot); err != nil || info.Mode().Perm() != 0o750 {
+		t.Errorf("projects_root: %v, %v; want mode 0750", info, err)
+	}
+}
+
 func TestRunKeepsExistingProjectsRoot(t *testing.T) {
 	e := newEnv(t)
 	os.MkdirAll(e.opts.File.ProjectsRoot, 0o755)
@@ -308,5 +325,25 @@ func TestOwnersCheck(t *testing.T) {
 		if _, err := owners.Check(ctx, patterns); err == nil {
 			t.Errorf("Check(%q) succeeded, want error", patterns)
 		}
+	}
+}
+
+// A GitHub that does not answer is asked once: every wait freezes the wizard.
+func TestOwnersCheckRemembersFailures(t *testing.T) {
+	var requests atomic.Int32
+	gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		http.Error(w, "unavailable", http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(gh.Close)
+	owners := &Owners{Resolver: &auth.OwnerResolver{APIBase: gh.URL}}
+	for range 2 {
+		lookups, err := owners.Check(context.Background(), []string{"alice/*"})
+		if err != nil || len(lookups) != 1 || lookups[0].Err == nil {
+			t.Fatalf("lookups = %+v, err = %v; want one failed lookup", lookups, err)
+		}
+	}
+	if n := requests.Load(); n != 1 {
+		t.Errorf("GitHub asked %d times, want 1", n)
 	}
 }

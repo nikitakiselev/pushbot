@@ -30,7 +30,7 @@ type Lookup struct {
 }
 
 // Owners looks up allow-list owners on GitHub and remembers the answers, so
-// the wizard and Run ask about each owner once.
+// the wizard and Run ask about each owner once per pushbot init.
 type Owners struct {
 	Resolver *auth.OwnerResolver
 
@@ -74,14 +74,14 @@ func (o *Owners) lookup(ctx context.Context, owner string) Lookup {
 	if l, ok := o.known[owner]; ok {
 		return l
 	}
+	// Failures are remembered too: a GitHub that does not answer would freeze
+	// the wizard on every Enter. pushbot retries the lookup when it starts.
 	id, err := o.Resolver.Resolve(ctx, owner)
 	l := Lookup{Owner: owner, ID: id, Err: err}
-	if err == nil || errors.Is(err, auth.ErrOwnerNotFound) {
-		if o.known == nil {
-			o.known = map[string]Lookup{}
-		}
-		o.known[owner] = l
+	if o.known == nil {
+		o.known = map[string]Lookup{}
 	}
+	o.known[owner] = l
 	return l
 }
 
@@ -181,6 +181,11 @@ func writeConfig(path string, data []byte) (backup string, err error) {
 		tmp.Close()
 		return "", err
 	}
+	// Without it a crash right after the rename can leave an empty config.
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return "", err
+	}
 	if err := tmp.Close(); err != nil {
 		return "", err
 	}
@@ -195,7 +200,11 @@ func makeProjectsRoot(root string, o Options) error {
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
-	if err := os.MkdirAll(root, 0o750); err != nil {
+	// Parents must stay traversable for the pushbot user, as install -d made them.
+	if err := os.MkdirAll(filepath.Dir(root), 0o755); err != nil {
+		return err
+	}
+	if err := os.Mkdir(root, 0o750); err != nil {
 		return err
 	}
 	if err := os.Chmod(root, 0o750); err != nil {

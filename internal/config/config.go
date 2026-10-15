@@ -148,16 +148,28 @@ func decode(data []byte) (File, error) {
 	return f, err
 }
 
-// ValidateAllow checks one allow pattern.
+// ValidateAllow checks one allow pattern for a new config. It is stricter than
+// Parse, which keeps accepting existing configs: a repository part with a
+// slash or a space never matches a repository name.
 func ValidateAllow(pattern string) error {
-	_, err := parseAllowRule(pattern)
-	return err
+	rule, err := parseAllowRule(pattern)
+	if err != nil {
+		return err
+	}
+	if strings.ContainsAny(rule.RepoGlob, "/ \t") {
+		return fmt.Errorf("%q: the repository part cannot contain a slash or a space; separate patterns", pattern)
+	}
+	return nil
 }
 
 // ValidateAddress checks a listen address: host:port, the host may be empty.
 func ValidateAddress(addr string) error {
-	if _, port, err := net.SplitHostPort(addr); err != nil || port == "" {
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil || port == "" {
 		return fmt.Errorf("expected host:port, got %q", addr)
+	}
+	if _, err := net.LookupPort("tcp", port); err != nil {
+		return fmt.Errorf("%q: invalid port", addr)
 	}
 	return nil
 }

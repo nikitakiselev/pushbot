@@ -57,7 +57,8 @@ if ! /usr/local/bin/pushbot init --help >/dev/null 2>&1; then
 fi
 # PUSHBOT_ALLOW keeps the install command of earlier versions working.
 if [ -n "${PUSHBOT_ALLOW:-}" ]; then
-  exec /usr/local/bin/pushbot init --allow "$PUSHBOT_ALLOW"
+  /usr/local/bin/pushbot init --allow "$PUSHBOT_ALLOW"
+  exit
 fi
 cat <<EOF
 pushbot $(/usr/local/bin/pushbot version) is installed. Create the config and start it:

@@ -53,24 +53,22 @@ as config.yml.bak.`,
 			out := cmd.OutOrStdout()
 			ctx := cmd.Context()
 
-			f, exists := baseConfig(configPath, out)
+			var given settingFlags
 			flags := cmd.Flags()
 			if flags.Changed("allow") {
-				f.Allow = allow
+				given.allow = &allow
 			}
 			if flags.Changed("listen") {
-				f.Listen = listen
+				given.listen = &listen
 			}
 			if flags.Changed("projects-root") {
-				f.ProjectsRoot = projectsRoot
+				given.projectsRoot = &projectsRoot
 			}
 			if flags.Changed("metrics-listen") {
-				f.MetricsListen = metricsListen
+				given.metricsListen = &metricsListen
 			}
-			settings := flags.Changed("allow") || flags.Changed("listen") ||
-				flags.Changed("projects-root") || flags.Changed("metrics-listen")
 			terminal := term.IsTerminal(os.Stdin.Fd()) && term.IsTerminal(os.Stdout.Fd())
-			wizard, err := useWizard(configPath, settings, force, exists, terminal)
+			f, wizard, err := prepare(configPath, given, force, terminal, out)
 			if err != nil {
 				return err
 			}
@@ -83,8 +81,6 @@ as config.yml.bak.`,
 					}
 					return err
 				}
-			} else if len(f.Allow) == 0 {
-				return errors.New("pass --allow: who may deploy, e.g. --allow 'your-github-login/*'")
 			}
 
 			opts := setup.Options{Path: configPath, File: f, Owners: owners, Chown: chownToDaemonUser, Out: out}
@@ -110,7 +106,7 @@ as config.yml.bak.`,
 func useWizard(path string, settings, force, exists, terminal bool) (bool, error) {
 	switch {
 	case settings && exists && !force:
-		return false, fmt.Errorf("config %s exists: run pushbot init without flags to edit it, or pass --force to replace it", path)
+		return false, fmt.Errorf("config %s exists: run pushbot init without flags to edit it, or pass --force to change it with the flags", path)
 	case settings:
 		return false, nil
 	case !terminal:
@@ -120,18 +116,58 @@ func useWizard(path string, settings, force, exists, terminal bool) (bool, error
 	}
 }
 
-// baseConfig returns the existing config, or the defaults if there is none or
-// it cannot be read.
-func baseConfig(path string, out io.Writer) (f config.File, exists bool) {
+// settingFlags are the setting flags given on the command line; nil if not given.
+type settingFlags struct {
+	allow                               *[]string
+	listen, projectsRoot, metricsListen *string
+}
+
+func (s settingFlags) given() bool {
+	return s.allow != nil || s.listen != nil || s.projectsRoot != nil || s.metricsListen != nil
+}
+
+// prepare reads the existing config and decides where the settings come from.
+// It returns the config for the wizard to start from, or the config to write,
+// with the flags applied on top of the existing one. Without the wizard, a
+// config that cannot be read is an error: starting from the defaults would
+// quietly reset every setting the flags do not name.
+func prepare(path string, s settingFlags, force, terminal bool, out io.Writer) (config.File, bool, error) {
 	f, err := config.ReadFile(path)
-	if errors.Is(err, fs.ErrNotExist) {
-		return config.File{Listen: config.DefaultListen, ProjectsRoot: config.DefaultProjectsRoot}, false
+	exists := !errors.Is(err, fs.ErrNotExist)
+	wizard, werr := useWizard(path, s.given(), force, exists, terminal)
+	if werr != nil {
+		return config.File{}, false, werr
 	}
-	if err != nil {
+	defaults := config.File{Listen: config.DefaultListen, ProjectsRoot: config.DefaultProjectsRoot}
+	switch {
+	case err == nil:
+	case !exists:
+		f = defaults
+	case wizard:
 		fmt.Fprintf(out, "! cannot read %s, starting from the defaults: %v\n", path, err)
-		return config.File{Listen: config.DefaultListen, ProjectsRoot: config.DefaultProjectsRoot}, true
+		f = defaults
+	default:
+		return config.File{}, false, fmt.Errorf("cannot read the config, fix it or run pushbot init without flags to start from the defaults: %w", err)
 	}
-	return f, true
+	if wizard {
+		return f, true, nil
+	}
+	if s.allow != nil {
+		f.Allow = *s.allow
+	}
+	if s.listen != nil {
+		f.Listen = *s.listen
+	}
+	if s.projectsRoot != nil {
+		f.ProjectsRoot = *s.projectsRoot
+	}
+	if s.metricsListen != nil {
+		f.MetricsListen = *s.metricsListen
+	}
+	if len(f.Allow) == 0 {
+		return config.File{}, false, errors.New("pass --allow: who may deploy, e.g. --allow 'your-github-login/*'")
+	}
+	return f, false, nil
 }
 
 // answers holds the wizard's fields. The fields are exported so that the file
@@ -139,7 +175,9 @@ func baseConfig(path string, out io.Writer) (f config.File, exists bool) {
 type answers struct{ Allow, Listen, ProjectsRoot, MetricsListen string }
 
 func (a answers) apply(f config.File) config.File {
-	f.Allow, f.Listen, f.ProjectsRoot = splitPatterns(a.Allow), a.Listen, a.ProjectsRoot
+	f.Allow = splitPatterns(a.Allow)
+	f.Listen = strings.TrimSpace(a.Listen)
+	f.ProjectsRoot = strings.TrimSpace(a.ProjectsRoot)
 	f.MetricsListen = strings.TrimSpace(a.MetricsListen)
 	return f
 }
@@ -165,12 +203,12 @@ func runWizard(ctx context.Context, f config.File, owners *setup.Owners, path st
 			huh.NewInput().Title("Listen address").
 				Description("host:port for the daemon; the reverse proxy connects here").
 				Value(&a.Listen).
-				Validate(config.ValidateAddress),
+				Validate(func(s string) error { return config.ValidateAddress(strings.TrimSpace(s)) }),
 			huh.NewInput().Title("Projects root").
 				Description("Directory for the deployed projects").
 				Value(&a.ProjectsRoot).
 				Validate(func(s string) error {
-					if !filepath.IsAbs(s) {
+					if !filepath.IsAbs(strings.TrimSpace(s)) {
 						return errors.New("must be an absolute path")
 					}
 					return nil

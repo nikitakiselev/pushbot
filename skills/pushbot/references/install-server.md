@@ -177,7 +177,9 @@ and which repositories `allow` admits. To connect a repository, follow
 
 - **Change settings** with `sudo pushbot init --force` and the flags to change.
   Settings you do not name are kept. `init` checks the owners on GitHub, keeps the
-  previous file as `config.yml.bak` and restarts the service.
+  previous file as `config.yml.bak` and restarts the service. If the existing
+  file cannot be read, `init` with flags refuses rather than reset it to the
+  defaults: show the user the error and fix the file together.
 - **Allow more repositories:** `--allow` replaces the whole list, so read the
   current `allow` in `/etc/pushbot/config.yml` and pass every pattern, old and new:
   `sudo pushbot init --force --allow 'alice/*' --allow 'my-org/homelab-*'`.
