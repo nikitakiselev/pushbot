@@ -10,6 +10,8 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    env:
+      GOTOOLCHAIN: go1.27.3
     steps:
       - uses: actions/checkout@v4
         with:
@@ -17,6 +19,12 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - name: Scan Linux source before release
+        run: |
+          go version
+          go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 govulncheck ./...
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 govulncheck ./...
       - uses: goreleaser/goreleaser-action@v6
         with:
           version: "~> v2"
