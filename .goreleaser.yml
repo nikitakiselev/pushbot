@@ -6,6 +6,10 @@ builds:
     goos: [linux]
     goarch: [amd64, arm64]
     flags: [-trimpath]
+    hooks:
+      post:
+        - "go version -m {{ .Path }}"
+        - "govulncheck -mode=binary {{ .Path }}"
     ldflags: ["-s -w -X main.version={{ .Version }}"]
 
 archives:
