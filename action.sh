@@ -149,28 +149,29 @@ fi
 verbose=false
 if [ "${PUSHBOT_VERBOSE:-false}" = true ] || [ "${RUNNER_DEBUG:-}" = 1 ]; then verbose=true; fi
 
-# quiet holds back the output of the current step and prints it only before
-# "PUSHBOT: failed", or at the end when the log has no result line (a rejected
-# request, a lost connection).
+# quiet holds back the output of the current step in a file and prints it only
+# before "PUSHBOT: failed", or at the end when the log has no result line (a
+# rejected request, a lost connection).
 quiet() {
-  local line done=false step=()
+  local line done=false
+  : >"$work/step"
   while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in
-    "==> ["[0-9]*) step=() ;;
+    "==> ["[0-9]*/[0-9]*"] "*) : >"$work/step" ;;
     "==> "*) ;;
     "PUSHBOT: success"*) done=true ;;
     "PUSHBOT: failed"*)
-      if [ ${#step[@]} -gt 0 ]; then printf '%s\n' "${step[@]}"; fi
+      cat "$work/step"
       done=true
       ;;
     *)
-      step+=("$line")
+      printf '%s\n' "$line" >>"$work/step"
       continue
       ;;
     esac
     printf '%s\n' "$line"
   done
-  if [ "$done" = false ] && [ ${#step[@]} -gt 0 ]; then printf '%s\n' "${step[@]}"; fi
+  if [ "$done" = false ]; then cat "$work/step"; fi
 }
 
 set +e
