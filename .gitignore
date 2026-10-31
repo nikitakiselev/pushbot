@@ -1,2 +1,24 @@
+# Build and test artifacts
 /dist/
 /pushbot
+*.test
+/coverage.out
+/coverage.html
+
+# Local Go workspace
+/go.work
+/go.work.sum
+
+# Local environment overrides
+.env
+.env.*
+!.env.example
+!.env.sample
+!.env.template
+
+# Editor and OS files
+.idea/
+.DS_Store
+*.swp
+*.swo
+*~

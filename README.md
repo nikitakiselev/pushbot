@@ -389,6 +389,11 @@ environments:
 | `config` | `pushbot.yml` | manifest path relative to the repository root |
 | `registry-auth` | `true` | send the temporary `github.token` so the server can pull a private image from ghcr.io |
 | `audience` | `pushbot` | OIDC token audience |
+| `verbose` | `false` | show the full output of the steps |
+
+By default the job log is short: the steps, the result and the output of a step that
+failed. `verbose: true` shows everything the steps print, and so does re-running the
+job with debug logging enabled. The deploy log on the server is always complete.
 
 ## Daemon config
 
