@@ -144,9 +144,39 @@ if [ "${PUSHBOT_REGISTRY_AUTH:-true}" = "true" ]; then
   form+=(-F "registry_user=<$work/registry_user" -F "registry_token=<$work/registry_token")
 fi
 
+# The job log gets the daemon's own lines (==>, PUSHBOT:) and the output of a
+# failed step; the verbose input or a re-run with debug logging shows it all.
+verbose=false
+if [ "${PUSHBOT_VERBOSE:-false}" = true ] || [ "${RUNNER_DEBUG:-}" = 1 ]; then verbose=true; fi
+
+# quiet holds back the output of the current step and prints it only before
+# "PUSHBOT: failed", or at the end when the log has no result line (a rejected
+# request, a lost connection).
+quiet() {
+  local line done=false step=()
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+    "==> ["[0-9]*) step=() ;;
+    "==> "*) ;;
+    "PUSHBOT: success"*) done=true ;;
+    "PUSHBOT: failed"*)
+      if [ ${#step[@]} -gt 0 ]; then printf '%s\n' "${step[@]}"; fi
+      done=true
+      ;;
+    *)
+      step+=("$line")
+      continue
+      ;;
+    esac
+    printf '%s\n' "$line"
+  done
+  if [ "$done" = false ] && [ ${#step[@]} -gt 0 ]; then printf '%s\n' "${step[@]}"; fi
+}
+
 set +e
 curl -sS -N -H @"$work/headers" -H 'Expect:' -D "$work/response-headers" \
-  "${form[@]}" "${PUSHBOT_URL%/}/v1/deploy" | tee "$work/out"
+  "${form[@]}" "${PUSHBOT_URL%/}/v1/deploy" | tee "$work/out" |
+  if [ "$verbose" = true ]; then cat; else quiet; fi
 rc=${PIPESTATUS[0]}
 set -e
 [ "$rc" -eq 0 ] || die "request to $PUSHBOT_URL failed (curl exit code $rc)"

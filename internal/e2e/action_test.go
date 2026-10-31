@@ -103,7 +103,7 @@ steps:
 	h.write(t, "deploy/prod with space.yml", "prod\n")
 	h.write(t, "not-listed.txt", "must stay on the runner\n")
 
-	out, err := h.action(t)
+	out, err := h.action(t, "PUSHBOT_VERBOSE=true")
 	if err != nil {
 		t.Fatalf("action failed: %v\n%s", err, out)
 	}
@@ -185,7 +185,7 @@ environments:
 	h.write(t, "deploy/staging.env", "APP_ENV=staging\n")
 	h.issuer.SetActionsClaims(map[string]any{"environment": "staging"})
 
-	out, err := h.action(t, "PUSHBOT_ENV=", "PUSHBOT_SECRETS="+secretsJSON)
+	out, err := h.action(t, "PUSHBOT_ENV=", "PUSHBOT_SECRETS="+secretsJSON, "PUSHBOT_VERBOSE=true")
 	if err != nil {
 		t.Fatalf("action failed: %v\n%s", err, out)
 	}
@@ -201,6 +201,62 @@ environments:
 	}
 	if _, err := os.Stat(filepath.Join(dir, "compose.staging.yml")); err != nil {
 		t.Errorf("staging files were not deployed: %v", err)
+	}
+}
+
+const quietManifest = `
+steps:
+  - run: echo first-output
+  - run: |
+      echo second-output
+      exit ${FAIL:-0}
+`
+
+func TestActionQuietLog(t *testing.T) {
+	h := newHarness(t)
+	h.write(t, "pushbot.yml", quietManifest)
+	out, err := h.action(t)
+	if err != nil {
+		t.Fatalf("action failed: %v\n%s", err, out)
+	}
+	for _, want := range []string{"==> [1/2] echo first-output\n", "==> [2/2] echo second-output …\n", "PUSHBOT: success ("} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output lacks %q:\n%s", want, out)
+		}
+	}
+	for _, hidden := range []string{"first-output\n", "second-output\n"} {
+		if strings.Contains(out, "\n"+hidden) {
+			t.Errorf("output shows the step output %q:\n%s", hidden, out)
+		}
+	}
+}
+
+func TestActionQuietLogShowsFailedStep(t *testing.T) {
+	h := newHarness(t)
+	h.write(t, "pushbot.yml", quietManifest)
+	out, err := h.action(t, "PUSHBOT_ENV=FAIL=3")
+	if err == nil {
+		t.Fatalf("action succeeded, want failure:\n%s", out)
+	}
+	if strings.Contains(out, "\nfirst-output\n") {
+		t.Errorf("output shows the output of a step that passed:\n%s", out)
+	}
+	if want := "==> [2/2] echo second-output …\nsecond-output\nPUSHBOT: failed: step 2/2 exited with code 3\n"; !strings.Contains(out, want) {
+		t.Errorf("output lacks %q:\n%s", want, out)
+	}
+}
+
+func TestActionDebugLogIsVerbose(t *testing.T) {
+	h := newHarness(t)
+	h.write(t, "pushbot.yml", quietManifest)
+	out, err := h.action(t, "RUNNER_DEBUG=1")
+	if err != nil {
+		t.Fatalf("action failed: %v\n%s", err, out)
+	}
+	for _, want := range []string{"\nfirst-output\n", "\nsecond-output\n"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output lacks %q:\n%s", want, out)
+		}
 	}
 }
 
@@ -246,7 +302,7 @@ func TestActionOldServer(t *testing.T) {
 func TestActionWithoutFilesOrRegistry(t *testing.T) {
 	h := newHarness(t)
 	h.write(t, "pushbot.yml", "steps:\n  - run: echo \"docker_config=${DOCKER_CONFIG:-unset}\"\n")
-	out, err := h.action(t, "PUSHBOT_REGISTRY_AUTH=false")
+	out, err := h.action(t, "PUSHBOT_REGISTRY_AUTH=false", "PUSHBOT_VERBOSE=true")
 	if err != nil {
 		t.Fatalf("action failed: %v\n%s", err, out)
 	}
@@ -272,7 +328,7 @@ func TestActionFails(t *testing.T) {
 			name:     "repository not allowed",
 			manifest: "steps:\n  - run: 'true'\n",
 			claims:   map[string]any{"repository": "stranger/x", "repository_owner_id": "9"},
-			want:     "HTTP 403",
+			want:     "repository stranger/x is not in the allow list",
 		},
 		{
 			name:     "listed file missing",

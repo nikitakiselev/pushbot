@@ -30,6 +30,12 @@ inputs:
     description: Audience of the OIDC token; must match the daemon's audience setting.
     required: false
     default: pushbot
+  verbose:
+    description: >-
+      Show the full output of the deploy steps. By default the log shows the steps
+      and the result, plus the output of a step that failed.
+    required: false
+    default: "false"
 
 runs:
   using: composite
@@ -43,5 +49,6 @@ runs:
         PUSHBOT_CONFIG: ${{ inputs.config }}
         PUSHBOT_REGISTRY_AUTH: ${{ inputs.registry-auth }}
         PUSHBOT_AUDIENCE: ${{ inputs.audience }}
+        PUSHBOT_VERBOSE: ${{ inputs.verbose }}
         PUSHBOT_REGISTRY_USER: ${{ github.actor }}
         PUSHBOT_REGISTRY_TOKEN: ${{ github.token }}

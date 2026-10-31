@@ -17,8 +17,10 @@ gh run view <run-id> --log-failed
   starting with `pushbot:`), then
   `the server rejected the deploy (HTTP <code>)`. If the line before is an HTML
   page instead, the reverse proxy rejected the request, not pushbot.
-- A deploy that started prints lines starting with `==>` plus the steps' output,
-  and ends with `PUSHBOT: success (…s)` or `PUSHBOT: failed: <reason>`.
+- A deploy that started prints lines starting with `==>`, one per step, and ends
+  with `PUSHBOT: success (…s)` or `PUSHBOT: failed: <reason>`. Only a failed step's
+  output is shown, right above `PUSHBOT: failed`; for the output of every step set
+  `verbose: true` on the pushbot step, or re-run the job with debug logging.
 
 **The server**, if the user can give you a shell there:
 
